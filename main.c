@@ -450,6 +450,205 @@ void scanLines() {
 	layerSize = layerCount * sizeof(layerData);
 }
 
+SDL_TimerID timerKeyRepeat = NULL;
+SDL_TimerID timerDragRender = NULL;
+float gXmouseDown = 0.0, gYmouseDown = 0.0;
+
+void handle_mousedown(SDL_MouseButtonEvent button) {
+	//printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
+	switch (button.button) {
+		case 1: // left mouse
+			{
+				float mousex = button.x;
+				float mousey = Surf_Display->h - button.y;
+				float w = Surf_Display->w;
+				float h = Surf_Display->h;
+				float dim = minf(w, h);
+				gXmouseDown = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+				gYmouseDown = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
+				if (timerDragRender)
+					SDL_RemoveTimer(timerDragRender);
+				timerDragRender = SDL_AddTimer(50, &timerCallback, (void *) TIMER_DRAGRENDER);
+			}
+			break;
+		case 2: // middle mouse
+			break;
+		case 3: // right mouse
+			break;
+		case 4: // wheel up
+			if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
+			#ifdef	OPENGL
+				float mousex = button.x;
+				float mousey = Surf_Display->h - button.y;
+				float w = Surf_Display->w;
+				float h = Surf_Display->h;
+				float dim = minf(w, h);
+				float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+				float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
+				//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+				zoomFactor *= 1.1;
+				transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
+				transY = gY - (mousey / h) * 200.0 * h / dim/ zoomFactor;
+			#else
+				//float viewX = (gX - viewPortL) * zoomFactor,
+				float gX = ((float) button.x) / zoomFactor + viewPortL;
+				// float viewY = (viewPortB - gY) * zoomFactor,
+				float gY = viewPortB - ((float) button.y) / zoomFactor;
+				zoomFactor *= 1.1;
+				//printf("Zoom %g\n", zoomFactor);
+				viewPortL = gX - ((float) button.x) / zoomFactor;
+				viewPortB = ((float) button.y) / zoomFactor + gY;
+			#endif
+				render();
+			}
+			else if (currentLayer > 0)
+				drawLayer(--currentLayer);
+			break;
+		case 5: // wheel down
+			if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
+			#ifdef	OPENGL
+				float mousex = button.x;
+				float mousey = Surf_Display->h - button.y;
+				float w = Surf_Display->w;
+				float h = Surf_Display->h;
+				float dim = minf(w, h);
+				float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+				float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
+				//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+				zoomFactor /= 1.1;
+				transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
+				transY = gY - (mousey / h) * 200.0 * h / dim / zoomFactor;
+			#else
+				//float viewX = (gX - viewPortL) * zoomFactor,
+				float gX = ((float) button.x) / zoomFactor + viewPortL;
+				// float viewY = (viewPortB - gY) * zoomFactor,
+				float gY = viewPortB - ((float) button.y) / zoomFactor;
+				zoomFactor /= 1.1;
+				//printf("Zoom %g\n", zoomFactor);
+				viewPortL = gX - ((float) button.x) / zoomFactor;
+				viewPortB = ((float) button.y) / zoomFactor + gY;
+			#endif
+			}
+			else if (currentLayer < layerCount - 1)
+				drawLayer(++currentLayer);
+			render();
+			break;
+	}
+}
+void handle_mousemove(SDL_MouseMotionEvent motion) {
+	if (motion.state & 1) {	// left-drag
+		float mousex = motion.x;
+		float mousey = Surf_Display->h - motion.y;
+		float w = Surf_Display->w;
+		float h = Surf_Display->h;
+		float dim = minf(w, h);
+		transX = gXmouseDown - (mousex / w) * 200.0 * w / dim / zoomFactor;
+		transY = gYmouseDown - (mousey / h) * 200.0 * h / dim / zoomFactor;
+	}
+}
+void handle_mouseup(SDL_MouseButtonEvent button) {
+	switch (button.button) {
+		case 1: // left mouse
+			if (timerDragRender) {
+				SDL_RemoveTimer(timerDragRender);
+				timerDragRender = NULL;
+			}
+			break;
+	}
+}
+
+void handle_keydown(SDL_KeyboardEvent key) {
+	switch(key.keysym.sym) {
+		case SDLK_q:
+		case SDLK_ESCAPE:
+			printf("Exiting\n");
+			Running = false;
+			break;
+		case SDLK_r:
+			printf("Resetting position\n");
+			zoomFactor = 3;
+			#ifdef	OPENGL
+				transX = transY = 0.0;
+			#else
+				viewPortL = 0.0;
+				viewPortB = 200.0;
+			#endif
+			resize(600, 600);
+			render();
+			break;
+		case SDLK_PAGEUP:
+			layerVelocity = 1;
+			if (currentLayer < layerCount - 1)
+				drawLayer(++currentLayer);
+			if (timerKeyRepeat)
+				SDL_RemoveTimer(timerKeyRepeat);
+			timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
+			break;
+		case SDLK_PAGEDOWN:
+			layerVelocity = -1;
+			if (currentLayer > 0)
+				drawLayer(--currentLayer);
+			if (timerKeyRepeat)
+				SDL_RemoveTimer(timerKeyRepeat);
+			timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
+			break;
+		case SDLK_LSHIFT:
+			keymodifiermask |= KMM_LSHIFT;
+			break;
+		case SDLK_RSHIFT:
+			keymodifiermask |= KMM_RSHIFT;
+			break;
+		default:
+			printf("key %d pressed (%c)\n", key.keysym.sym, key.keysym.sym);
+			break;
+	}
+}
+
+void handle_keyup(SDL_KeyboardEvent key) {
+	switch(key.keysym.sym) {
+		case SDLK_PAGEUP:
+			layerVelocity = 0;
+			if (timerKeyRepeat) {
+				SDL_RemoveTimer(timerKeyRepeat);
+				timerKeyRepeat = NULL;
+			}
+			break;
+		case SDLK_PAGEDOWN:
+			layerVelocity = 0;
+			if (timerKeyRepeat) {
+				SDL_RemoveTimer(timerKeyRepeat);
+				timerKeyRepeat = NULL;
+			}
+			break;
+		case SDLK_LSHIFT:
+			keymodifiermask &= ~KMM_LSHIFT;
+			break;
+		case SDLK_RSHIFT:
+			keymodifiermask &= ~KMM_RSHIFT;
+			break;
+		default:
+			break;
+	}
+}
+
+void handle_userevent(SDL_UserEvent user) {
+	switch (user.code) {
+		case TIMER_KEYREPEAT:
+			if (layerVelocity > 0) {
+				if (currentLayer < layerCount - 1)
+					drawLayer(++currentLayer);
+			}
+			else if (layerVelocity < 0) {
+				if (currentLayer > 0)
+					drawLayer(--currentLayer);
+			}
+			break;
+		case TIMER_DRAGRENDER:
+			render();
+			break;
+	}
+}
+
 int main(int argc, char* argv[]) {
 	msgbuf = malloc(256);
 	msgbuf[0] = 0;
@@ -524,10 +723,7 @@ int main(int argc, char* argv[]) {
 
 	layerVelocity = 0;
 
-	SDL_TimerID timerKeyRepeat = NULL;
-	SDL_TimerID timerDragRender = NULL;
 	SDL_Event Event;
-	float gXmouseDown = 0.0, gYmouseDown = 0.0;
 	while(Running != false) {
 		if (SDL_WaitEvent(&Event) == 0)
 			die("SDL_WaitEvent", "");
@@ -542,197 +738,24 @@ int main(int argc, char* argv[]) {
 				render();
 				break;
 			case SDL_MOUSEBUTTONDOWN:
-				printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
-				switch (Event.button.button) {
-					case 1: // left mouse
-						{
-							float mousex = Event.button.x;
-							float mousey = Surf_Display->h - Event.button.y;
-							float w = Surf_Display->w;
-							float h = Surf_Display->h;
-							float dim = minf(w, h);
-							gXmouseDown = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
-							gYmouseDown = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
-							if (timerDragRender)
-								SDL_RemoveTimer(timerDragRender);
-							timerDragRender = SDL_AddTimer(50, &timerCallback, (void *) TIMER_DRAGRENDER);
-						}
-						break;
-					case 2: // middle mouse
-						break;
-					case 3: // right mouse
-						break;
-					case 4: // wheel up
-						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
-						#ifdef	OPENGL
-							float mousex = Event.button.x;
-							float mousey = Surf_Display->h - Event.button.y;
-							float w = Surf_Display->w;
-							float h = Surf_Display->h;
-							float dim = minf(w, h);
-							float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
-							float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
-							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
-							zoomFactor *= 1.1;
-							transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
-							transY = gY - (mousey / h) * 200.0 * h / dim/ zoomFactor;
-						#else
-							//float viewX = (gX - viewPortL) * zoomFactor,
-							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
-							// float viewY = (viewPortB - gY) * zoomFactor,
-							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
-							zoomFactor *= 1.1;
-							//printf("Zoom %g\n", zoomFactor);
-							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
-							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
-						#endif
-							render();
-						}
-						else if (currentLayer > 0)
-							drawLayer(--currentLayer);
-						break;
-					case 5: // wheel down
-						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
-						#ifdef	OPENGL
-							float mousex = Event.button.x;
-							float mousey = Surf_Display->h - Event.button.y;
-							float w = Surf_Display->w;
-							float h = Surf_Display->h;
-							float dim = minf(w, h);
-							float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
-							float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
-							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
-							zoomFactor /= 1.1;
-							transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
-							transY = gY - (mousey / h) * 200.0 * h / dim / zoomFactor;
-						#else
-							//float viewX = (gX - viewPortL) * zoomFactor,
-							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
-							// float viewY = (viewPortB - gY) * zoomFactor,
-							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
-							zoomFactor /= 1.1;
-							//printf("Zoom %g\n", zoomFactor);
-							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
-							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
-						#endif
-						}
-						else if (currentLayer < layerCount - 1)
-							drawLayer(++currentLayer);
-						render();
-						break;
-				}
+				handle_mousedown(Event.button);
 				break;
 			case SDL_MOUSEBUTTONUP:
-				switch (Event.button.button) {
-					case 1: // left mouse
-						if (timerDragRender) {
-							SDL_RemoveTimer(timerDragRender);
-							timerDragRender = NULL;
-						}
-						break;
-				}
+				handle_mouseup(Event.button);
 				break;
 			case SDL_MOUSEMOTION:
-				if (Event.motion.state & 1) {	// left-drag
-					float mousex = Event.button.x;
-					float mousey = Surf_Display->h - Event.button.y;
-					float w = Surf_Display->w;
-					float h = Surf_Display->h;
-					float dim = minf(w, h);
-					transX = gXmouseDown - (mousex / w) * 200.0 * w / dim / zoomFactor;
-					transY = gYmouseDown - (mousey / h) * 200.0 * h / dim / zoomFactor;
-				}
+				handle_mousemove(Event.motion);
 				break;
 			case SDL_ACTIVEEVENT: // lose or gain focus
 				break;
 			case SDL_KEYDOWN:
-				switch(Event.key.keysym.sym) {
-					case SDLK_q:
-					case SDLK_ESCAPE:
-						printf("Exiting\n");
-						Running = false;
-						break;
-					case SDLK_r:
-						printf("Resetting position\n");
-						zoomFactor = 3;
-						#ifdef	OPENGL
-							transX = transY = 0.0;
-						#else
-							viewPortL = 0.0;
-							viewPortB = 200.0;
-						#endif
-						resize(600, 600);
-						render();
-						break;
-					case SDLK_PAGEUP:
-						layerVelocity = 1;
-						if (currentLayer < layerCount - 1)
-							drawLayer(++currentLayer);
-						if (timerKeyRepeat)
-							SDL_RemoveTimer(timerKeyRepeat);
-						timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
-						break;
-					case SDLK_PAGEDOWN:
-						layerVelocity = -1;
-						if (currentLayer > 0)
-							drawLayer(--currentLayer);
-						if (timerKeyRepeat)
-							SDL_RemoveTimer(timerKeyRepeat);
-						timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
-						break;
-					case SDLK_LSHIFT:
-						keymodifiermask |= KMM_LSHIFT;
-						break;
-					case SDLK_RSHIFT:
-						keymodifiermask |= KMM_RSHIFT;
-						break;
-					default:
-						printf("key %d pressed (%c)\n", Event.key.keysym.sym, Event.key.keysym.sym);
-						break;
-				}
+				handle_keydown(Event.key);
 				break;
 			case SDL_KEYUP:
-				switch(Event.key.keysym.sym) {
-					case SDLK_PAGEUP:
-						layerVelocity = 0;
-						if (timerKeyRepeat) {
-							SDL_RemoveTimer(timerKeyRepeat);
-							timerKeyRepeat = NULL;
-						}
-						break;
-					case SDLK_PAGEDOWN:
-						layerVelocity = 0;
-						if (timerKeyRepeat) {
-							SDL_RemoveTimer(timerKeyRepeat);
-							timerKeyRepeat = NULL;
-						}
-						break;
-					case SDLK_LSHIFT:
-						keymodifiermask &= ~KMM_LSHIFT;
-						break;
-					case SDLK_RSHIFT:
-						keymodifiermask &= ~KMM_RSHIFT;
-						break;
-					default:
-						break;
-				}
+				handle_keyup(Event.key);
 				break;
 			case SDL_USEREVENT:
-				switch (Event.user.code) {
-					case TIMER_KEYREPEAT:
-						if (layerVelocity > 0) {
-							if (currentLayer < layerCount - 1)
-								drawLayer(++currentLayer);
-						}
-						else if (layerVelocity < 0) {
-							if (currentLayer > 0)
-								drawLayer(--currentLayer);
-						}
-						break;
-					case TIMER_DRAGRENDER:
-						render();
-						break;
-				}
+				handle_userevent(Event.user);
 				break;
 			default:
 				printf("SDL Event %d\n", Event.type);
