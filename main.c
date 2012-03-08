@@ -17,7 +17,7 @@
 #include	<string.h>
 #include	<fcntl.h>
 
-#include	<SDL.h>
+#include	<SDL/SDL.h>
 #include	<FTGL/ftgl.h>
 #include	<fontconfig/fontconfig.h>
 
@@ -45,13 +45,16 @@ int Surf_height;
 int filesz;
 char* gcodefile;
 
-int lineCount;
-char** lineIndex;
-
 int layerCount;
-char** layerIndex;
-int* layerSize;
-float* layerHeight;
+size_t layerSize;
+
+typedef struct {
+	char*	index;
+	int		size;
+	float	height;
+} layerData;
+
+layerData* layer;
 
 char *msgbuf;
 
@@ -177,8 +180,8 @@ void render() {
 		SDL_FillRect(Surf_Display, NULL, yellow);
 		int lines = 0;
 	#endif
-		char *s = layerIndex[currentLayer];
-		char *e = layerIndex[currentLayer] + layerSize[currentLayer];
+		char *s = layer[currentLayer].index;
+		char *e = layer[currentLayer].index + layer[currentLayer].size;
 		float X = NAN, Y = NAN, E = NAN, v = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
 		char *r;
 		int seen = 0;
@@ -319,10 +322,10 @@ void resize(int w, int h) {
 	render(); // redraw whole window
 }
 
-void drawLayer(int layer) {
-	snprintf(msgbuf, 256, "Layer %d: %5.2fmm", layer, layerHeight[layer]);
-	printf("Drawing layer %3d (%5.1f)\n", layer, layerHeight[layer]);
-	currentLayer = layer;
+void drawLayer(int layerNum) {
+	snprintf(msgbuf, 256, "Layer %d: %5.2fmm", layerNum, layer[layerNum].height);
+	printf("Drawing layer %3d (%5.1f)\n", layerNum, layer[layerNum].height);
+	currentLayer = layerNum;
 	render();
 }
 
@@ -336,23 +339,18 @@ void scanLines() {
 
 	printf("Indexing lines... ");
 
-	lineCount = 0;
-	lineIndex = malloc(filesz);
-
 	layerCount = 0;
-	layerIndex = malloc(filesz);
-	layerSize = malloc(filesz);
-	layerHeight = malloc(filesz);
+	// preallocate for 128 layers, we double the size later if it's not enough
+	layerSize = (128 * sizeof(layerData));
+	layer = malloc(layerSize);
+	//printf("allocated %d bytes (%d entries)\n", layerSize, layerSize / sizeof(layerData));
 
 	while (l < filesz) {
 		c = gcodefile[l];
 		if (nl == 0) {
 			if (c != 13 && c != 10) {
 				nl = 1;
-				lineIndex[lineCount++] = &gcodefile[l];
 				ls = l;
-				if (lineCount >> 2 > filesz)
-					die("Scan failed: ", "too many newlines!");
 			}
 		}
 		else if (c == 13 || c == 10) {
@@ -377,12 +375,19 @@ void scanLines() {
 						lastZ = zvalue;
 						//printf("layer %d starts at %d\n", layerCount, ls);
 						//printf("Layer %3d starts at %7d\n", layerCount, ls);
-						layerIndex[layerCount] = &gcodefile[ls];
-						layerHeight[layerCount] = zvalue;
+						layer[layerCount].index = &gcodefile[ls];
+						layer[layerCount].height = zvalue;
 						if (layerCount > 0) {
-							layerSize[layerCount - 1] = layerIndex[layerCount] - layerIndex[layerCount - 1];
+							layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
 						}
 						layerCount++;
+						if (layerCount * sizeof(layerData) > layerSize) {
+							//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
+							layer = realloc(layer, layerSize << 1);
+							if (layer == NULL)
+								die("Scan: realloc layer","");
+							layerSize = 2 * layerSize;
+						}
 					}
 				}
 			}
@@ -391,26 +396,14 @@ void scanLines() {
 	}
 
 	if (layerCount > 0)
-		layerSize[layerCount - 1] = &gcodefile[filesz] - layerIndex[layerCount - 1];
+		layer[layerCount - 1].size = &gcodefile[filesz] - layer[layerCount - 1].index;
 
-	printf("%d lines, ", lineCount);
 	printf("%d layers OK\n", layerCount);
 
-	lineIndex = realloc(lineIndex, lineCount * sizeof(lineIndex));
-	if (lineIndex == NULL)
-		die("Scan: realloc lineindex ","");
-
-	layerIndex = realloc(layerIndex , layerCount * sizeof(layerIndex ));
-	if (layerIndex == NULL)
-		die("Scan: realloc layerIndex ","");
-
-	layerSize = realloc(layerSize  , layerCount * sizeof(layerSize  ));
-	if (layerSize == NULL)
-		die("Scan: realloc layerSize ","");
-
-	layerHeight = realloc(layerHeight, layerCount * sizeof(layerHeight));
-	if (layerHeight == NULL)
-		die("Scan: realloc layerHeight ","");
+	layer = realloc(layer, layerCount * sizeof(layerData));
+	if (layer == NULL)
+		die("Scan: realloc layer","");
+	layerSize = layerCount * sizeof(layerData);
 }
 
 int main(int argc, char* argv[]) {
@@ -439,7 +432,7 @@ int main(int argc, char* argv[]) {
 	scanLines();
 
 	//for (int i = 0; i < layerCount; i++)
-	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layerIndex[i] - gcodefile, layerSize[i]);
+	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layer[i].index - gcodefile, layer[i].size);
 
 	Running = true;
 	Surf_Display = NULL;
@@ -522,7 +515,7 @@ int main(int argc, char* argv[]) {
 							float h = Surf_Display->h;
 							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
 							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
-							printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
 							zoomFactor *= 1.1;
 							transX = gX - (mousex / w) * 200.0 / zoomFactor;
 							transY = gY - (mousey / h) * 200.0 / zoomFactor;
@@ -532,7 +525,7 @@ int main(int argc, char* argv[]) {
 							// float viewY = (viewPortB - gY) * zoomFactor,
 							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
 							zoomFactor *= 1.1;
-							printf("Zoom %g\n", zoomFactor);
+							//printf("Zoom %g\n", zoomFactor);
 							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
 							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
 						#endif
@@ -542,8 +535,6 @@ int main(int argc, char* argv[]) {
 							drawLayer(--currentLayer);
 						break;
 					case 5: // wheel down
-						//if (currentLayer > 0)
-						//	drawLayer(--currentLayer);
 						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
 						#ifdef	OPENGL
 							float mousex = Event.button.x;
@@ -552,7 +543,7 @@ int main(int argc, char* argv[]) {
 							float h = Surf_Display->h;
 							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
 							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
-							printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
 							zoomFactor /= 1.1;
 							transX = gX - (mousex / w) * 200.0 / zoomFactor;
 							transY = gY - (mousey / h) * 200.0 / zoomFactor;
@@ -562,7 +553,7 @@ int main(int argc, char* argv[]) {
 							// float viewY = (viewPortB - gY) * zoomFactor,
 							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
 							zoomFactor /= 1.1;
-							printf("Zoom %g\n", zoomFactor);
+							//printf("Zoom %g\n", zoomFactor);
 							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
 							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
 						#endif
@@ -582,7 +573,8 @@ int main(int argc, char* argv[]) {
 			case SDL_KEYDOWN:
 				switch(Event.key.keysym.sym) {
 					case SDLK_q:
-						printf("got keypress Q, quitting\n");
+					case SDLK_ESCAPE:
+						printf("Exiting\n");
 						Running = false;
 						break;
 					case SDLK_r:
@@ -669,10 +661,7 @@ int main(int argc, char* argv[]) {
 	}
 	if (timer)
 		SDL_RemoveTimer(timer);
-	free(lineIndex);
-	free(layerIndex);
-	free(layerSize);
-	free(layerHeight);
+	free(layer);
 	SDL_FreeSurface(Surf_Display);
 	SDL_Quit();
 	return 0;
