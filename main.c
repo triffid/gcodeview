@@ -383,12 +383,12 @@ void scanLines() {
 							layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
 						}
 						layerCount++;
-						if (layerCount * sizeof(layerData) > layerSize) {
+						if ((layerCount + 1) * sizeof(layerData) > layerSize) {
 							//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
 							layer = realloc(layer, layerSize << 1);
 							if (layer == NULL)
 								die("Scan: realloc layer","");
-							layerSize = 2 * layerSize;
+							layerSize <<= 1;
 						}
 					}
 				}
