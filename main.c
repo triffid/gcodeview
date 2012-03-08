@@ -96,10 +96,13 @@ void die(char* call, char* data) {
 	exit(1);
 }
 
+#define	TIMER_KEYREPEAT 1
+#define	TIMER_DRAGRENDER 2
+
 Uint32 timerCallback(Uint32 interval, void* param) {
 	SDL_Event e;
 	e.type = SDL_USEREVENT;
-	e.user.code = 1;
+	e.user.code = (int) param;
 	e.user.data1 = 0;
 	e.user.data2 = 0;
 
@@ -228,8 +231,7 @@ void render() {
 	#endif
 		char *s = layer[currentLayer].index;
 		char *e = layer[currentLayer].index + layer[currentLayer].size;
-		float G = NAN, X = NAN, Y = NAN, E = NAN, v = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
-		char *r;
+		float G = NAN, X = NAN, Y = NAN, E = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
 		uint32_t seen = 0;
 
 		for (X = 0; X < 201.0; X += 10.0) {
@@ -355,7 +357,7 @@ void scanLines() {
 
 	char *end;
 	uint32_t seen;
-	float G, Z, lastZ, hopZ, E;
+	float G, Z, lastZ, E;
 
 	int ZstackIndex = 0;
 	struct {
@@ -522,8 +524,10 @@ int main(int argc, char* argv[]) {
 
 	layerVelocity = 0;
 
-	SDL_TimerID timer = NULL;
+	SDL_TimerID timerKeyRepeat = NULL;
+	SDL_TimerID timerDragRender = NULL;
 	SDL_Event Event;
+	float gXmouseDown, gYmouseDown;
 	while(Running != false) {
 		if (SDL_WaitEvent(&Event) == 0)
 			die("SDL_WaitEvent", "");
@@ -538,15 +542,25 @@ int main(int argc, char* argv[]) {
 				render();
 				break;
 			case SDL_MOUSEBUTTONDOWN:
-				//printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
+				printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
 				switch (Event.button.button) {
-					case 0: // left mouse
-						break;
-					case 1: // right mouse
+					case 1: // left mouse
+						{
+							float mousex = Event.button.x;
+							float mousey = Surf_Display->h - Event.button.y;
+							float w = Surf_Display->w;
+							float h = Surf_Display->h;
+							float dim = minf(w, h);
+							gXmouseDown = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+							gYmouseDown = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
+							if (timerDragRender)
+								SDL_RemoveTimer(timerDragRender);
+							timerDragRender = SDL_AddTimer(50, &timerCallback, (void *) TIMER_DRAGRENDER);
+						}
 						break;
 					case 2: // middle mouse
 						break;
-					case 3: // ???
+					case 3: // right mouse
 						break;
 					case 4: // wheel up
 						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
@@ -609,8 +623,25 @@ int main(int argc, char* argv[]) {
 				}
 				break;
 			case SDL_MOUSEBUTTONUP:
+				switch (Event.button.button) {
+					case 1: // left mouse
+						if (timerDragRender) {
+							SDL_RemoveTimer(timerDragRender);
+							timerDragRender = NULL;
+						}
+						break;
+				}
 				break;
 			case SDL_MOUSEMOTION:
+				if (Event.motion.state & 1) {	// left-drag
+					float mousex = Event.button.x;
+					float mousey = Surf_Display->h - Event.button.y;
+					float w = Surf_Display->w;
+					float h = Surf_Display->h;
+					float dim = minf(w, h);
+					transX = gXmouseDown - (mousex / w) * 200.0 * w / dim / zoomFactor;
+					transY = gYmouseDown - (mousey / h) * 200.0 * h / dim / zoomFactor;
+				}
 				break;
 			case SDL_ACTIVEEVENT: // lose or gain focus
 				break;
@@ -637,17 +668,17 @@ int main(int argc, char* argv[]) {
 						layerVelocity = 1;
 						if (currentLayer < layerCount - 1)
 							drawLayer(++currentLayer);
-						if (timer)
-							SDL_RemoveTimer(timer);
-						timer = SDL_AddTimer(500, &timerCallback, NULL);
+						if (timerKeyRepeat)
+							SDL_RemoveTimer(timerKeyRepeat);
+						timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
 						break;
 					case SDLK_PAGEDOWN:
 						layerVelocity = -1;
 						if (currentLayer > 0)
 							drawLayer(--currentLayer);
-						if (timer)
-							SDL_RemoveTimer(timer);
-						timer = SDL_AddTimer(500, &timerCallback, NULL);
+						if (timerKeyRepeat)
+							SDL_RemoveTimer(timerKeyRepeat);
+						timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
 						break;
 					case SDLK_LSHIFT:
 						keymodifiermask |= KMM_LSHIFT;
@@ -664,16 +695,16 @@ int main(int argc, char* argv[]) {
 				switch(Event.key.keysym.sym) {
 					case SDLK_PAGEUP:
 						layerVelocity = 0;
-						if (timer) {
-							SDL_RemoveTimer(timer);
-							timer = NULL;
+						if (timerKeyRepeat) {
+							SDL_RemoveTimer(timerKeyRepeat);
+							timerKeyRepeat = NULL;
 						}
 						break;
 					case SDLK_PAGEDOWN:
 						layerVelocity = 0;
-						if (timer) {
-							SDL_RemoveTimer(timer);
-							timer = NULL;
+						if (timerKeyRepeat) {
+							SDL_RemoveTimer(timerKeyRepeat);
+							timerKeyRepeat = NULL;
 						}
 						break;
 					case SDLK_LSHIFT:
@@ -687,13 +718,20 @@ int main(int argc, char* argv[]) {
 				}
 				break;
 			case SDL_USEREVENT:
-				if (layerVelocity > 0) {
-					if (currentLayer < layerCount - 1)
-						drawLayer(++currentLayer);
-				}
-				else if (layerVelocity < 0) {
-					if (currentLayer > 0)
-						drawLayer(--currentLayer);
+				switch (Event.user.code) {
+					case TIMER_KEYREPEAT:
+						if (layerVelocity > 0) {
+							if (currentLayer < layerCount - 1)
+								drawLayer(++currentLayer);
+						}
+						else if (layerVelocity < 0) {
+							if (currentLayer > 0)
+								drawLayer(--currentLayer);
+						}
+						break;
+					case TIMER_DRAGRENDER:
+						render();
+						break;
 				}
 				break;
 			default:
@@ -703,8 +741,8 @@ int main(int argc, char* argv[]) {
 		//idle code
 		//render code
 	}
-	if (timer)
-		SDL_RemoveTimer(timer);
+	if (timerKeyRepeat)
+		SDL_RemoveTimer(timerKeyRepeat);
 	free(layer);
 	SDL_FreeSurface(Surf_Display);
 	SDL_Quit();
