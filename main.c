@@ -74,13 +74,13 @@ float zoomFactor;
 
 float linewords[26];
 
-float mind(float a, float b) {
+float minf(float a, float b) {
 	if (a < b)
 		return a;
 	return b;
 }
 
-float maxd(float a, float b) {
+float maxf(float a, float b) {
 	if (a > b)
 		return a;
 	return b;
@@ -300,6 +300,11 @@ void resize(int w, int h) {
 	Surf_width = w;
 	Surf_height = h;
 	#ifdef	OPENGL
+		int dim;
+		if (w > h)
+			dim = h;
+		else
+			dim = w;
 		if (Surf_Display != NULL)
 			SDL_FreeSurface(Surf_Display);
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
@@ -315,7 +320,7 @@ void resize(int w, int h) {
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glMatrixMode(GL_PROJECTION);
 		glLoadIdentity();
-		glOrtho(0, 200, 0, 200, 0, 1);
+		glOrtho(0, 200 * w / dim, 0, 200 * h / dim, 0, 1);
 		glDisable(GL_DEPTH_TEST);
 		glMatrixMode(GL_MODELVIEW);
 		glLoadIdentity();
@@ -550,12 +555,13 @@ int main(int argc, char* argv[]) {
 							float mousey = Surf_Display->h - Event.button.y;
 							float w = Surf_Display->w;
 							float h = Surf_Display->h;
-							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
-							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
+							float dim = minf(w, h);
+							float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+							float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
 							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
 							zoomFactor *= 1.1;
-							transX = gX - (mousex / w) * 200.0 / zoomFactor;
-							transY = gY - (mousey / h) * 200.0 / zoomFactor;
+							transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
+							transY = gY - (mousey / h) * 200.0 * h / dim/ zoomFactor;
 						#else
 							//float viewX = (gX - viewPortL) * zoomFactor,
 							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
@@ -578,12 +584,13 @@ int main(int argc, char* argv[]) {
 							float mousey = Surf_Display->h - Event.button.y;
 							float w = Surf_Display->w;
 							float h = Surf_Display->h;
-							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
-							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
+							float dim = minf(w, h);
+							float gX = transX + (mousex / w) * 200.0 * w / dim / zoomFactor;
+							float gY = transY + (mousey / h) * 200.0 * h / dim / zoomFactor;
 							//printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
 							zoomFactor /= 1.1;
-							transX = gX - (mousex / w) * 200.0 / zoomFactor;
-							transY = gY - (mousey / h) * 200.0 / zoomFactor;
+							transX = gX - (mousex / w) * 200.0 * w / dim / zoomFactor;
+							transY = gY - (mousey / h) * 200.0 * h / dim / zoomFactor;
 						#else
 							//float viewX = (gX - viewPortL) * zoomFactor,
 							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
