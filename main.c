@@ -357,7 +357,7 @@ void scanLines() {
 
 	char *end;
 	uint32_t seen;
-	float G, Z, lastZ, E;
+	float G, Z, lastZ = 0.0, E;
 
 	int ZstackIndex = 0;
 	struct {
@@ -527,7 +527,7 @@ int main(int argc, char* argv[]) {
 	SDL_TimerID timerKeyRepeat = NULL;
 	SDL_TimerID timerDragRender = NULL;
 	SDL_Event Event;
-	float gXmouseDown, gYmouseDown;
+	float gXmouseDown = 0.0, gYmouseDown = 0.0;
 	while(Running != false) {
 		if (SDL_WaitEvent(&Event) == 0)
 			die("SDL_WaitEvent", "");
