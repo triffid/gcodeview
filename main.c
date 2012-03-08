@@ -72,6 +72,8 @@ int keymodifiermask;
 
 float zoomFactor;
 
+float linewords[26];
+
 float mind(float a, float b) {
 	if (a < b)
 		return a;
@@ -104,6 +106,49 @@ Uint32 timerCallback(Uint32 interval, void* param) {
 	SDL_PushEvent(&e);
 
 	return 50;
+}
+
+#define	LMASK(l) (1<<((l & ~0x20) - 'A'))
+
+uint32_t scanline(char *line, int length, float *words, char **end) {
+	int i = 0;
+	uint32_t seen = 0;
+
+	#define	COMMENT_SEMICOLON 1
+	#define	COMMENT_PARENTHESIS 2
+	int comment = 0;
+	while (i < length) {
+		char c = line[i];
+		if (c == 13 || c == 10) {
+			*end = &line[i + 1];
+			return seen;
+		}
+		if ((comment & COMMENT_SEMICOLON) == 0) {
+			if (c == ';')
+				comment |= COMMENT_SEMICOLON;
+			else if (c == '(')
+				comment |= COMMENT_PARENTHESIS;
+			else if (c == ')')
+				comment &= ~COMMENT_PARENTHESIS;
+
+			else if (comment == 0) {
+				if (c >= 'a' && c <= 'z')
+					c &= ~0x20;
+				if (c >= 'A' && c <= 'Z') {
+					char *e;
+					float v = strtof(&line[i + 1], &e);
+					if (e > &line[i + 1]) {
+						seen |= LMASK(c);
+						words[c - 'A'] = v;
+						i = e - line - 1;
+					}
+				}
+			}
+		}
+		i++;
+	}
+	*end = &line[i];
+	return seen;
 }
 
 void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
@@ -182,9 +227,9 @@ void render() {
 	#endif
 		char *s = layer[currentLayer].index;
 		char *e = layer[currentLayer].index + layer[currentLayer].size;
-		float X = NAN, Y = NAN, E = NAN, v = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
+		float G = NAN, X = NAN, Y = NAN, E = NAN, v = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
 		char *r;
-		int seen = 0;
+		uint32_t seen = 0;
 
 		for (X = 0; X < 201.0; X += 10.0) {
 			gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
@@ -194,6 +239,16 @@ void render() {
 		while (s < e) {
 			//printf("s is at %d, char is %c\n", s - layerIndex[currentLayer], *s);
 			switch (*s) {
+				case 'g': case 'G':
+					v = strtof(s + 1, &r);
+					if (r > s + 1) {
+						G = v;
+						s = r;
+						seen |= 1<<('G' - 'A');
+					}
+					else
+						s++;
+					break;
 				case 'x': case 'X':
 					//printf("found X\n");
 					v = strtof(s + 1, &r);
@@ -201,7 +256,7 @@ void render() {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						X = v;
 						s = r;
-						seen |= 1;
+						seen |= 1<<('X' - 'A');
 					}
 					else
 						s++;
@@ -214,7 +269,7 @@ void render() {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						Y = v;
 						s = r;
-						seen |= 2;
+						seen |= 1<<('Y' - 'A');
 					}
 					else
 						s++;
@@ -227,7 +282,7 @@ void render() {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						E = v;
 						s = r;
-						seen |= 4;
+						seen |= 1<<('E' - 'A');
 					}
 					else
 						s++;
@@ -235,7 +290,7 @@ void render() {
 				case 13: case 10:
 					s++;
 					// draw
-					if (seen & 3) {
+					if ((seen & 1<<('G' - 'A')) && (seen & (1<<('X' - 'A') | 1<<('Y' - 'A'))) && (G == 0 || G == 1)) {
 						uint8_t r = 0, g = 0, b = 0, a = 224;
 						if (isnan(lastX))
 							lastX = X;
@@ -325,19 +380,14 @@ void resize(int w, int h) {
 }
 
 void drawLayer(int layerNum) {
-	snprintf(msgbuf, 256, "Layer %d: %5.2fmm", layerNum, layer[layerNum].height);
-	printf("Drawing layer %3d (%5.1f)\n", layerNum, layer[layerNum].height);
+	snprintf(msgbuf, 256, "Layer %3d: %gmm", layerNum, layer[layerNum].height);
+	printf("Drawing layer %3d (%5.2f)\n", layerNum, layer[layerNum].height);
 	currentLayer = layerNum;
 	render();
 }
 
 void scanLines() {
-	float lastZ = 0;
 	int l = 0;
-	uint8_t c;
-	uint8_t nl = 0;
-	int ls = 0;
-	int comment = 0;
 
 	printf("Indexing lines... ");
 
@@ -347,54 +397,88 @@ void scanLines() {
 	layer = malloc(layerSize);
 	//printf("allocated %d bytes (%d entries)\n", layerSize, layerSize / sizeof(layerData));
 
+	char *end;
+	uint32_t seen;
+	float G, Z, lastZ, hopZ, E;
+
+	int ZstackIndex = 0;
+	struct {
+		char *start;
+		float Z;
+	} Zstack[8];
+
 	while (l < filesz) {
-		c = gcodefile[l];
-		if (nl == 0) {
-			if (c != 13 && c != 10) {
-				nl = 1;
-				ls = l;
-			}
-		}
-		else if (c == 13 || c == 10) {
-			nl = 0;
-			comment = 0;
-		}
-		if (comment == 2 && c == ')')
-			comment  = 0;
-		else if (comment == 0) {
-			if (c == ';')
-				comment = 1;
-			else if (c == '(')
-				comment = 2;
-			else if (c == 'z' || c == 'Z') {
-				//printf("found a Z at %d: %c... \n", l, gcodefile[l]);
-				char *end;
-				float zvalue = strtof(&gcodefile[l + 1], &end);
-				if (end > &gcodefile[l + 1]) {
-					//printf("height: %g...\n", zvalue);
-					if (zvalue > lastZ) {
-						//printf("greater than %g...\n", lastZ);
-						lastZ = zvalue;
-						//printf("layer %d starts at %d\n", layerCount, ls);
-						//printf("Layer %3d starts at %7d\n", layerCount, ls);
-						layer[layerCount].index = &gcodefile[ls];
-						layer[layerCount].height = zvalue;
-						if (layerCount > 0) {
-							layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
-						}
-						layerCount++;
-						if ((layerCount + 1) * sizeof(layerData) > layerSize) {
-							//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
-							layer = realloc(layer, layerSize << 1);
-							if (layer == NULL)
-								die("Scan: realloc layer","");
-							layerSize <<= 1;
-						}
+		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
+		//printf("found line %d chars long at %d. G:%d Z:%d E:%d\n", end - &gcodefile[l], l, seen & LMASK('G')?1:0, seen & LMASK('Z')?1:0, seen & LMASK('E')?1:0);
+
+		G = linewords['G' - 'A'];
+		Z = linewords['Z' - 'A'];
+		E = linewords['E' - 'A'];
+
+		//printf("G%g Z%g E%g\n", G, Z, E);
+
+		if (((seen & LMASK('G')) != 0) && (G == 0.0 || G == 1.0)) {
+			if ((seen & LMASK('Z')) != 0) {
+				for (int i = 0; i < ZstackIndex; i++) {
+					if (Zstack[i].Z == Z) {
+						ZstackIndex = i;
+						break;
 					}
 				}
+				//printf("Zstack: %d\n", ZstackIndex);
+				Zstack[ZstackIndex].start = &gcodefile[l];
+				Zstack[ZstackIndex].Z = Z;
+				if (ZstackIndex < 8 - 1)
+					ZstackIndex++;
+				else
+					die("overflow while checking if Z moves are related to hop","");
+			}
+			if (((seen & LMASK('E')) != 0) && (ZstackIndex > 0) && (Z != lastZ)) {
+				int i;
+				for (i = 0; i < ZstackIndex; i++) {
+					if (Zstack[i].Z == Z)
+						break;
+				}
+				//printf("Got G%g and E%g in same line! Zstack is at %d (%d) and that layer starts at char %d\n", G, E, ZstackIndex, i, Zstack[i].start - gcodefile); // exit(1);
+				if (i < 8) {
+					layer[layerCount].index = Zstack[i].start;
+					layer[layerCount].height = Zstack[i].Z;
+					lastZ = layer[layerCount].height;
+					Zstack[0].start = layer[layerCount].index;
+					Zstack[0].Z = layer[layerCount].height;
+					ZstackIndex = 1;
+					//printf("LAYER %d RECORDED\n", layerCount);
+					if (layerCount > 0)
+						layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
+					layerCount++;
+					if ((layerCount + 1) * sizeof(layerData) > layerSize) {
+						//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
+						layer = realloc(layer, layerSize << 1);
+						if (layer == NULL)
+							die("Scan: realloc layer","");
+						layerSize <<= 1;
+					}
+				}
+				else
+					die("Zstack: can't find Z value in stack!","this should never happen");
 			}
 		}
-		l++;
+		l = end - gcodefile;
+
+		#if 0
+			layer[layerCount].index = &gcodefile[ls];
+			layer[layerCount].height = zvalue;
+			if (layerCount > 0)
+				layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
+			layerCount++;
+			if ((layerCount + 1) * sizeof(layerData) > layerSize) {
+				//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
+				layer = realloc(layer, layerSize << 1);
+				if (layer == NULL)
+					die("Scan: realloc layer","");
+				layerSize <<= 1;
+			}
+		#endif
 	}
 
 	if (layerCount > 0)
