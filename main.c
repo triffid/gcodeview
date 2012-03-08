@@ -35,6 +35,8 @@
 	float viewPortL, viewPortR, viewPortT, viewPortB;
 #endif
 
+float extrusionWidth = 0.3;
+
 bool Running;
 SDL_Surface* Surf_Display;
 int Surf_width;
@@ -252,7 +254,7 @@ void render() {
 						}
 						//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
 						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
-							gline(lastX, lastY, X, Y, 0.4, r, g, b, a);
+							gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
 						//printf("drawn\n");
 					}
 					seen = 0;
