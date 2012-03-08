@@ -109,6 +109,7 @@ Uint32 timerCallback(Uint32 interval, void* param) {
 }
 
 #define	LMASK(l) (1<<((l & ~0x20) - 'A'))
+#define	SEEN(c) ((seen & LMASK(c)) != 0)
 
 uint32_t scanline(char *line, int length, float *words, char **end) {
 	int i = 0;
@@ -237,93 +238,43 @@ void render() {
 		}
 
 		while (s < e) {
-			//printf("s is at %d, char is %c\n", s - layerIndex[currentLayer], *s);
-			switch (*s) {
-				case 'g': case 'G':
-					v = strtof(s + 1, &r);
-					if (r > s + 1) {
-						G = v;
-						s = r;
-						seen |= 1<<('G' - 'A');
-					}
-					else
-						s++;
-					break;
-				case 'x': case 'X':
-					//printf("found X\n");
-					v = strtof(s + 1, &r);
-					if (r > s + 1) {
-						//printf("length is %d, value is %g\n", r - (s + 1), v);
-						X = v;
-						s = r;
-						seen |= 1<<('X' - 'A');
-					}
-					else
-						s++;
-					//printf("break\n");
-					break;
-				case 'y': case 'Y':
-					//printf("found Y\n");
-					v = strtof(s + 1, &r);
-					if (r > s + 1) {
-						//printf("length is %d, value is %g\n", r - (s + 1), v);
-						Y = v;
-						s = r;
-						seen |= 1<<('Y' - 'A');
-					}
-					else
-						s++;
-					//printf("break\n");
-					break;
-				case 'e': case 'E':
-					//printf("found E\n");
-					v = strtof(s + 1, &r);
-					if (r > s + 1) {
-						//printf("length is %d, value is %g\n", r - (s + 1), v);
-						E = v;
-						s = r;
-						seen |= 1<<('E' - 'A');
-					}
-					else
-						s++;
-					break;
-				case 13: case 10:
-					s++;
+			seen = scanline(s, e - s, linewords, &s);
+			if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
+				if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
+					G = linewords['G' - 'A'];
+					X = linewords['X' - 'A'];
+					Y = linewords['Y' - 'A'];
+					E = linewords['E' - 'A'];
 					// draw
-					if ((seen & 1<<('G' - 'A')) && (seen & (1<<('X' - 'A') | 1<<('Y' - 'A'))) && (G == 0 || G == 1)) {
-						uint8_t r = 0, g = 0, b = 0, a = 224;
-						if (isnan(lastX))
-							lastX = X;
-						if (isnan(lastY))
-							lastY = Y;
-						if (isnan(lastE))
-							lastE = E;
-						if (E > lastE) {
-							r = 0;
-							g = 0;
-							b = 0;
-							a = 224;
-						}
-						else {
-							r = 0;
-							g = 128;
-							b = 64;
-							a = 160;
-						}
-						//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
-						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
-							gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
-						//printf("drawn\n");
+					uint8_t r = 0, g = 0, b = 0, a = 224;
+					if (isnan(lastX))
+						lastX = X;
+					if (isnan(lastY))
+						lastY = Y;
+					if (isnan(lastE))
+						lastE = E;
+					if (SEEN('E') && (E > lastE)) {
+						r = 0;
+						g = 0;
+						b = 0;
+						a = 224;
 					}
-					seen = 0;
-					//
-					lastX = X;
-					lastY = Y;
-					lastE = E;
-					break;
-				default:
-					s++;
-					break;
+					else {
+						r = 0;
+						g = 128;
+						b = 64;
+						a = 160;
+					}
+					//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
+					if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
+						gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
+					//printf("drawn\n");
+				}
+				seen = 0;
+				//
+				lastX = X;
+				lastY = Y;
+				lastE = E;
 			}
 		}
 	#ifdef	OPENGL
