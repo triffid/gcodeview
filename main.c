@@ -304,6 +304,8 @@ void resize(int w, int h) {
 		glClearDepth(1.0f);
 		glShadeModel(GL_SMOOTH);
 		glEnable(GL_BLEND);
+		glEnable(GL_POLYGON_SMOOTH);
+		glEnable(GL_LINE_SMOOTH);
 		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 		glMatrixMode(GL_PROJECTION);
 		glLoadIdentity();
