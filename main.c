@@ -59,6 +59,12 @@ FTGLfont* font = NULL;
 
 int currentLayer;
 
+#define	KMM_LSHIFT 1
+#define KMM_RSHIFT 2
+#define	KMM_CTRL   4
+#define	KMM_ALT    8
+int keymodifiermask;
+
 float zoomFactor;
 
 float mind(float a, float b) {
@@ -506,10 +512,8 @@ int main(int argc, char* argv[]) {
 					case 3: // ???
 						break;
 					case 4: // wheel up
-						//if (currentLayer < layerCount - 1)
-						//	drawLayer(++currentLayer);
+						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
 						#ifdef	OPENGL
-						{
 							float mousex = Event.button.x;
 							float mousey = Surf_Display->h - Event.button.y;
 							float w = Surf_Display->w;
@@ -520,9 +524,7 @@ int main(int argc, char* argv[]) {
 							zoomFactor *= 1.1;
 							transX = gX - (mousex / w) * 200.0 / zoomFactor;
 							transY = gY - (mousey / h) * 200.0 / zoomFactor;
-						};
 						#else
-						{
 							//float viewX = (gX - viewPortL) * zoomFactor,
 							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
 							// float viewY = (viewPortB - gY) * zoomFactor,
@@ -531,15 +533,17 @@ int main(int argc, char* argv[]) {
 							printf("Zoom %g\n", zoomFactor);
 							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
 							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
-						};
 						#endif
-						render();
+							render();
+						}
+						else if (currentLayer > 0)
+							drawLayer(--currentLayer);
 						break;
 					case 5: // wheel down
 						//if (currentLayer > 0)
 						//	drawLayer(--currentLayer);
+						if ((keymodifiermask & (KMM_LSHIFT | KMM_RSHIFT)) == 0) {
 						#ifdef	OPENGL
-						{
 							float mousex = Event.button.x;
 							float mousey = Surf_Display->h - Event.button.y;
 							float w = Surf_Display->w;
@@ -550,9 +554,7 @@ int main(int argc, char* argv[]) {
 							zoomFactor /= 1.1;
 							transX = gX - (mousex / w) * 200.0 / zoomFactor;
 							transY = gY - (mousey / h) * 200.0 / zoomFactor;
-						};
 						#else
-						do {
 							//float viewX = (gX - viewPortL) * zoomFactor,
 							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
 							// float viewY = (viewPortB - gY) * zoomFactor,
@@ -561,8 +563,10 @@ int main(int argc, char* argv[]) {
 							printf("Zoom %g\n", zoomFactor);
 							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
 							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
-						} while (0);
 						#endif
+						}
+						else if (currentLayer < layerCount - 1)
+							drawLayer(++currentLayer);
 						render();
 						break;
 				}
@@ -607,7 +611,14 @@ int main(int argc, char* argv[]) {
 							SDL_RemoveTimer(timer);
 						timer = SDL_AddTimer(500, &timerCallback, NULL);
 						break;
+					case SDLK_LSHIFT:
+						keymodifiermask |= KMM_LSHIFT;
+						break;
+					case SDLK_RSHIFT:
+						keymodifiermask |= KMM_RSHIFT;
+						break;
 					default:
+						printf("key %d pressed (%c)\n", Event.key.keysym.sym, Event.key.keysym.sym);
 						break;
 				}
 				break;
@@ -626,6 +637,12 @@ int main(int argc, char* argv[]) {
 							SDL_RemoveTimer(timer);
 							timer = NULL;
 						}
+						break;
+					case SDLK_LSHIFT:
+						keymodifiermask &= ~KMM_LSHIFT;
+						break;
+					case SDLK_RSHIFT:
+						keymodifiermask &= ~KMM_RSHIFT;
 						break;
 					default:
 						break;
