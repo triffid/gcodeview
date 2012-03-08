@@ -36,6 +36,12 @@ Controls
 	
 	exit
 
+Platforms
+---------
+
+* works on linux
+* should work on mac, with some massaging of the Makefile (pull requests please!)
+* no idea about windows, pull requests welcome
 
 Dependencies
 ------------
@@ -43,4 +49,4 @@ Dependencies
 1. SDL
 2. OpenGL
 3. FTGL
-4. fontconfig
+4. fontconfig (linux/mac, windows probably can give me the path to a font some other way)
