@@ -766,6 +766,8 @@ int main(int argc, char* argv[]) {
 	}
 	if (timerKeyRepeat)
 		SDL_RemoveTimer(timerKeyRepeat);
+	if (timerDragRender)
+		SDL_RemoveTimer(timerDragRender);
 	free(layer);
 	SDL_FreeSurface(Surf_Display);
 	SDL_Quit();
