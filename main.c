@@ -1,4 +1,6 @@
+#ifndef	_GNU_SOURCE
 #define		_GNU_SOURCE
+#endif
 
 #include	<features.h>
 
@@ -11,17 +13,27 @@
 #include	<sys/types.h>
 
 #include	<math.h>
-#include	<regex.h>
 #include	<errno.h>
 #include	<string.h>
 #include	<fcntl.h>
 
 #include	<SDL.h>
-#include	<SDL_gfxPrimitives.h>
+#include	<FTGL/ftgl.h>
+#include	<fontconfig/fontconfig.h>
 
 #define		bool uint8_t
 #define		true	255
 #define		false	0
+
+#define		OPENGL
+
+#ifdef	OPENGL
+	#include	<SDL/SDL_opengl.h>
+	float transX, transY;
+#else
+	#include	<SDL_gfxPrimitives.h>
+	float viewPortL, viewPortR, viewPortT, viewPortB;
+#endif
 
 bool Running;
 SDL_Surface* Surf_Display;
@@ -37,28 +49,31 @@ char** lineIndex;
 int layerCount;
 char** layerIndex;
 int* layerSize;
-double* layerHeight;
+float* layerHeight;
 
+char *msgbuf;
+
+int layerVelocity;
+
+FTGLfont* font = NULL;
 
 int currentLayer;
 
-double zoomFactor;
+float zoomFactor;
 
-double viewPortL, viewPortR, viewPortT, viewPortB;
-
-double mind(double a, double b) {
+float mind(float a, float b) {
 	if (a < b)
 		return a;
 	return b;
 }
 
-double maxd(double a, double b) {
+float maxd(float a, float b) {
 	if (a > b)
 		return a;
 	return b;
 }
 
-double linint(double value, double oldmin, double oldmax, double newmin, double newmax) {
+float linint(float value, float oldmin, float oldmax, float newmin, float newmax) {
 	return (value - oldmin) * (newmax - newmin) / (oldmax - oldmin) + newmin;
 }
 
@@ -68,7 +83,65 @@ void die(char* call, char* data) {
 	exit(1);
 }
 
-void gline(double x1, double y1, double x2, double y2, double width, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+Uint32 timerCallback(Uint32 interval, void* param) {
+	SDL_Event e;
+	e.type = SDL_USEREVENT;
+	e.user.code = 1;
+	e.user.data1 = 0;
+	e.user.data2 = 0;
+
+	SDL_PushEvent(&e);
+
+	return 50;
+}
+
+void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
+	#ifdef	OPENGL
+		glBegin(GL_QUADS);
+		glColor4f(((float) r) / 255.0, ((float) g) / 255.0, ((float) b) / 255.0, ((float) a) / 255.0);
+		//   c1x,c1y
+		//  0,0......
+		//   c4x,c4y  ........       c2x,c2y
+		//                    ........ px,py
+		//                       c3x,c3y
+		float c1x, c1y, c1l, c2x, c2y, c2l, c3x, c3y, c3l, c4x, c4y, c4l;
+
+		float px = x2 - x1;
+		float py = y2 - y1;
+
+		c1x = -py;
+		c1y = px;
+		c1l = hypotf(c1x, c1y);
+		c1x = (c1x * width / c1l / 2.0) + x1;
+		c1y = (c1y * width / c1l / 2.0) + y1;
+
+		c2x = -py;
+		c2y = px;
+		c2l = hypotf(c2x, c2y);
+		c2x = (c2x * width / c2l / 2.0) + px + x1;
+		c2y = (c2y * width / c2l / 2.0) + py + y1;
+
+		c3x = py;
+		c3y = -px;
+		c3l = hypotf(c3x, c3y);
+		c3x = (c3x * width / c3l / 2.0) + px + x1;
+		c3y = (c3y * width / c3l / 2.0) + py + y1;
+
+		c4x = py;
+		c4y = -px;
+		c4l = hypotf(c4x, c4y);
+		c4x = (c4x * width / c4l / 2.0) + x1;
+		c4y = (c4y * width / c4l / 2.0) + y1;
+
+		if (width == 4.0)
+			printf("LINE: [%3.0f,%3.0f]->[%3.0f,%3.0f]->[%3.0f,%3.0f]->[%3.0f,%3.0f]\n", c1x, c1y, c2x, c2y, c3x, c3y, c4x, c4y);
+
+		glVertex2f(c1x, c1y);
+		glVertex2f(c2x, c2y);
+		glVertex2f(c3x, c3y);
+		glVertex2f(c4x, c4y);
+		glEnd();
+	#else
 	thickLineRGBA(Surf_Display,
 		(x1 - viewPortL) * zoomFactor,
 		(viewPortB - y1) * zoomFactor,
@@ -77,26 +150,34 @@ void gline(double x1, double y1, double x2, double y2, double width, uint8_t r, 
 		mind(maxd(width * zoomFactor, 1), 2),
 		r, g, b, a
 		);
+	#endif
 }
 
 void render() {
-	uint32_t yellow;
-
-	yellow = SDL_MapRGB(Surf_Display->format, 224, 224, 128);
-
-	SDL_LockSurface(Surf_Display);
+	#ifdef	OPENGL
+		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+		glLoadIdentity();
+		glPushMatrix();
+		glScalef(zoomFactor, zoomFactor, 0.0);
+		glTranslatef(-transX, -transY, 0.0);
+	#else
+		uint32_t yellow;
+	
+		yellow = SDL_MapRGB(Surf_Display->format, 224, 224, 128);
+	
+		SDL_LockSurface(Surf_Display);
+		SDL_FillRect(Surf_Display, NULL, yellow);
 		int lines = 0;
+	#endif
 		char *s = layerIndex[currentLayer];
 		char *e = layerIndex[currentLayer] + layerSize[currentLayer];
-		double X = 0.0, Y = 0.0, E = 0.0, v = 0.0, lastX = NAN, lastY = NAN, lastE = NAN;
+		float X = NAN, Y = NAN, E = NAN, v = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
 		char *r;
 		int seen = 0;
 
-		SDL_FillRect(Surf_Display, NULL, yellow);
-		
 		for (X = 0; X < 201.0; X += 10.0) {
-			gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.01, 0, 0, 0, 32);
-			gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.01, 0, 0, 0, 32);
+			gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
+			gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
 		}
 
 		while (s < e) {
@@ -104,7 +185,7 @@ void render() {
 			switch (*s) {
 				case 'x': case 'X':
 					//printf("found X\n");
-					v = strtod(s + 1, &r);
+					v = strtof(s + 1, &r);
 					if (r > s + 1) {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						X = v;
@@ -117,7 +198,7 @@ void render() {
 					break;
 				case 'y': case 'Y':
 					//printf("found Y\n");
-					v = strtod(s + 1, &r);
+					v = strtof(s + 1, &r);
 					if (r > s + 1) {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						Y = v;
@@ -130,7 +211,7 @@ void render() {
 					break;
 				case 'e': case 'E':
 					//printf("found E\n");
-					v = strtod(s + 1, &r);
+					v = strtof(s + 1, &r);
 					if (r > s + 1) {
 						//printf("length is %d, value is %g\n", r - (s + 1), v);
 						E = v;
@@ -164,7 +245,8 @@ void render() {
 							a = 160;
 						}
 						//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
-						gline(lastX, lastY, X, Y, 0.5, r, g, b, a);
+						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
+							gline(lastX, lastY, X, Y, 0.4, r, g, b, a);
 						//printf("drawn\n");
 					}
 					seen = 0;
@@ -178,16 +260,49 @@ void render() {
 					break;
 			}
 		}
+	#ifdef	OPENGL
+		glPopMatrix();
+		glPushMatrix();
+			glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
+			glScalef(0.3, 0.3, 1.0);
+			ftglSetFontFaceSize(font, 20, 20);
+			ftglRenderFont(font, msgbuf, FTGL_RENDER_ALL);
+		glPopMatrix();
+		glFlush();
+		glFinish();
+		SDL_GL_SwapBuffers();
+		glFinish();
+	#else
+		SDL_UnlockSurface(Surf_Display);
 
-	SDL_UnlockSurface(Surf_Display);
-
-	SDL_Flip(Surf_Display);
+		SDL_Flip(Surf_Display);
+	#endif
 }
 
 void resize(int w, int h) {
 	Surf_width = w;
 	Surf_height = h;
-	Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_DOUBLEBUF | SDL_RESIZABLE);
+	#ifdef	OPENGL
+		if (Surf_Display != NULL)
+			SDL_FreeSurface(Surf_Display);
+		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_RESIZABLE | SDL_OPENGL);
+		w = Surf_Display->w; h = Surf_Display->h;
+		glViewport(0, 0, w, h);
+		glClearColor(0.8, 0.8, 0.5, 0.5);
+		glClearDepth(1.0f);
+		glShadeModel(GL_SMOOTH);
+		glEnable(GL_BLEND);
+		glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+		glMatrixMode(GL_PROJECTION);
+		glLoadIdentity();
+		glOrtho(0, 200, 0, 200, 0, 1);
+		glDisable(GL_DEPTH_TEST);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadIdentity();
+	#else
+		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_floatBUF | SDL_RESIZABLE);
+	#endif
 	if (Surf_Display == NULL) {
 		SDL_FreeSurface(Surf_Display);
 		SDL_Quit();
@@ -197,21 +312,19 @@ void resize(int w, int h) {
 }
 
 void drawLayer(int layer) {
+	snprintf(msgbuf, 256, "Layer %d: %5.2fmm", layer, layerHeight[layer]);
 	printf("Drawing layer %3d (%5.1f)\n", layer, layerHeight[layer]);
 	currentLayer = layer;
 	render();
 }
 
 void scanLines() {
-	int nlayers = 0;
-	double lastZ = 0;
+	float lastZ = 0;
 	int l = 0;
-	int r;
 	uint8_t c;
 	uint8_t nl = 0;
 	int ls = 0;
 	int comment = 0;
-	regex_t* lineRegex;
 
 	printf("Indexing lines... ");
 
@@ -248,7 +361,7 @@ void scanLines() {
 			else if (c == 'z' || c == 'Z') {
 				//printf("found a Z at %d: %c... \n", l, gcodefile[l]);
 				char *end;
-				double zvalue = strtod(&gcodefile[l + 1], &end);
+				float zvalue = strtof(&gcodefile[l + 1], &end);
 				if (end > &gcodefile[l + 1]) {
 					//printf("height: %g...\n", zvalue);
 					if (zvalue > lastZ) {
@@ -293,6 +406,9 @@ void scanLines() {
 }
 
 int main(int argc, char* argv[]) {
+	msgbuf = malloc(256);
+	msgbuf[0] = 0;
+
 	if (argc == 1) {
 		printf("USAGE: gcodeview <file>\n");
 		return 0;
@@ -314,8 +430,8 @@ int main(int argc, char* argv[]) {
 
 	scanLines();
 
-	for (int i = 0; i < layerCount; i++)
-		printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layerIndex[i] - gcodefile, layerSize[i]);
+	//for (int i = 0; i < layerCount; i++)
+	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layerIndex[i] - gcodefile, layerSize[i]);
 
 	Running = true;
 	Surf_Display = NULL;
@@ -323,16 +439,47 @@ int main(int argc, char* argv[]) {
 	if (SDL_Init(SDL_INIT_EVERYTHING) < 0)
 		die("SDL_init", "");
 
-	viewPortL = viewPortT = 0.0;
-	viewPortR = viewPortB = 200.0;
-	zoomFactor = 3;
+	if (FcInitLoadConfigAndFonts() == ((void *) FcTrue))
+		die("FontConfig Init","");
 
-	resize(viewPortR * zoomFactor, viewPortB * zoomFactor);
+	// from http://www.spinics.net/lists/font-config/msg03050.html
+		FcPattern *pat, *match;
+		FcResult result;
+		char *file;
+		int index;
+		pat = FcPatternCreate();
+		FcPatternAddString(pat, FC_FAMILY, (FcChar8 *) "Mono");
+		FcConfigSubstitute(NULL, pat, FcMatchPattern);
+		FcDefaultSubstitute(pat);
+		match = FcFontMatch(NULL, pat, &result);
+		FcPatternGetString(match, FC_FILE, 0, (FcChar8 **) &file);
+		FcPatternGetInteger(match, FC_INDEX, 0, &index);
+
+		FcPatternDestroy (match);
+		FcPatternDestroy (pat);
+
+	font = ftglCreateExtrudeFont(file);
+	if (!font)
+		die("FTGL createFont", "");
+
+	#ifdef	OPENGL
+		transX = transY = 0.0;
+		zoomFactor = 1.0;
+		resize(600, 600);
+	#else
+		viewPortL = viewPortT = 0.0;
+		viewPortR = viewPortB = 200.0;
+		zoomFactor = 3.0;
+		resize(viewPortR * zoomFactor, viewPortB * zoomFactor);
+	#endif
 
 	SDL_WM_SetCaption("gcodeview", 0);
 
 	drawLayer(0);
 
+	layerVelocity = 0;
+
+	SDL_TimerID timer = NULL;
 	SDL_Event Event;
 	while(Running != false) {
 		if (SDL_WaitEvent(&Event) == 0)
@@ -343,6 +490,9 @@ int main(int argc, char* argv[]) {
 				break;
 			case SDL_VIDEORESIZE:
 				resize(Event.resize.w, Event.resize.h);
+				break;
+			case SDL_VIDEOEXPOSE:
+				render();
 				break;
 			case SDL_MOUSEBUTTONDOWN:
 				//printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
@@ -358,32 +508,62 @@ int main(int argc, char* argv[]) {
 					case 4: // wheel up
 						//if (currentLayer < layerCount - 1)
 						//	drawLayer(++currentLayer);
-						do {
-							//double viewX = (gX - viewPortL) * zoomFactor,
-							double gX = ((double) Event.button.x) / zoomFactor + viewPortL;
-							// double viewY = (viewPortB - gY) * zoomFactor,
-							double gY = viewPortB - ((double) Event.button.y) / zoomFactor;
+						#ifdef	OPENGL
+						{
+							float mousex = Event.button.x;
+							float mousey = Surf_Display->h - Event.button.y;
+							float w = Surf_Display->w;
+							float h = Surf_Display->h;
+							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
+							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
+							printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+							zoomFactor *= 1.1;
+							transX = gX - (mousex / w) * 200.0 / zoomFactor;
+							transY = gY - (mousey / h) * 200.0 / zoomFactor;
+						};
+						#else
+						{
+							//float viewX = (gX - viewPortL) * zoomFactor,
+							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
+							// float viewY = (viewPortB - gY) * zoomFactor,
+							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
 							zoomFactor *= 1.1;
 							printf("Zoom %g\n", zoomFactor);
-							viewPortL = gX - ((double) Event.button.x) / zoomFactor;
-							viewPortB = ((double) Event.button.y) / zoomFactor + gY;
-							render();
-						} while (0);
+							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
+							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
+						};
+						#endif
+						render();
 						break;
 					case 5: // wheel down
 						//if (currentLayer > 0)
 						//	drawLayer(--currentLayer);
+						#ifdef	OPENGL
+						{
+							float mousex = Event.button.x;
+							float mousey = Surf_Display->h - Event.button.y;
+							float w = Surf_Display->w;
+							float h = Surf_Display->h;
+							float gX = transX + (mousex / w) * 200.0 / zoomFactor;
+							float gY = transY + (mousey / h) * 200.0 / zoomFactor;
+							printf("%d,%d->%d,%d\n", (int) transX, (int) transY, (int) gX, (int) gY);
+							zoomFactor /= 1.1;
+							transX = gX - (mousex / w) * 200.0 / zoomFactor;
+							transY = gY - (mousey / h) * 200.0 / zoomFactor;
+						};
+						#else
 						do {
-							//double viewX = (gX - viewPortL) * zoomFactor,
-							double gX = ((double) Event.button.x) / zoomFactor + viewPortL;
-							// double viewY = (viewPortB - gY) * zoomFactor,
-							double gY = viewPortB - ((double) Event.button.y) / zoomFactor;
+							//float viewX = (gX - viewPortL) * zoomFactor,
+							float gX = ((float) Event.button.x) / zoomFactor + viewPortL;
+							// float viewY = (viewPortB - gY) * zoomFactor,
+							float gY = viewPortB - ((float) Event.button.y) / zoomFactor;
 							zoomFactor /= 1.1;
 							printf("Zoom %g\n", zoomFactor);
-							viewPortL = gX - ((double) Event.button.x) / zoomFactor;
-							viewPortB = ((double) Event.button.y) / zoomFactor + gY;
-							render();
+							viewPortL = gX - ((float) Event.button.x) / zoomFactor;
+							viewPortB = ((float) Event.button.y) / zoomFactor + gY;
 						} while (0);
+						#endif
+						render();
 						break;
 				}
 				break;
@@ -402,21 +582,64 @@ int main(int argc, char* argv[]) {
 					case SDLK_r:
 						printf("Resetting position\n");
 						zoomFactor = 3;
-						viewPortL = 0.0;
-						viewPortB = 200.0;
+						#ifdef	OPENGL
+							transX = transY = 0.0;
+						#else
+							viewPortL = 0.0;
+							viewPortB = 200.0;
+						#endif
+						resize(600, 600);
 						render();
 						break;
 					case SDLK_PAGEUP:
+						layerVelocity = 1;
 						if (currentLayer < layerCount - 1)
 							drawLayer(++currentLayer);
+						if (timer)
+							SDL_RemoveTimer(timer);
+						timer = SDL_AddTimer(500, &timerCallback, NULL);
 						break;
 					case SDLK_PAGEDOWN:
+						layerVelocity = -1;
 						if (currentLayer > 0)
 							drawLayer(--currentLayer);
+						if (timer)
+							SDL_RemoveTimer(timer);
+						timer = SDL_AddTimer(500, &timerCallback, NULL);
+						break;
+					default:
 						break;
 				}
 				break;
 			case SDL_KEYUP:
+				switch(Event.key.keysym.sym) {
+					case SDLK_PAGEUP:
+						layerVelocity = 0;
+						if (timer) {
+							SDL_RemoveTimer(timer);
+							timer = NULL;
+						}
+						break;
+					case SDLK_PAGEDOWN:
+						layerVelocity = 0;
+						if (timer) {
+							SDL_RemoveTimer(timer);
+							timer = NULL;
+						}
+						break;
+					default:
+						break;
+				}
+				break;
+			case SDL_USEREVENT:
+				if (layerVelocity > 0) {
+					if (currentLayer < layerCount - 1)
+						drawLayer(++currentLayer);
+				}
+				else if (layerVelocity < 0) {
+					if (currentLayer > 0)
+						drawLayer(--currentLayer);
+				}
 				break;
 			default:
 				printf("SDL Event %d\n", Event.type);
@@ -425,6 +648,8 @@ int main(int argc, char* argv[]) {
 		//idle code
 		//render code
 	}
+	if (timer)
+		SDL_RemoveTimer(timer);
 	free(lineIndex);
 	free(layerIndex);
 	free(layerSize);
