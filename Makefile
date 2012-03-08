@@ -5,7 +5,7 @@ LIBS		= sdl ftgl fontconfig gl
 OPTIMIZE	= 2
 
 CFLAGS		= -O$(OPTIMIZE) -std=c99  -Wall `pkg-config --cflags $(LIBS)`
-LDFLAGS		= `pkg-config --libs $(LIBS)`
+LDFLAGS		= `pkg-config --libs $(LIBS)` -lm
 
 SOURCES		= main.c
 OBJECTS		= $(SOURCES:.c=.o)
