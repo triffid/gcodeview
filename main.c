@@ -35,44 +35,64 @@
 	float viewPortL, viewPortR, viewPortT, viewPortB;
 #endif
 
-float extrusionWidth = 0.3;
 
 bool Running;
-SDL_Surface* Surf_Display;
-int Surf_width;
-int Surf_height;
 
+// GCODE file related stuff
 int filesz;
 char* gcodefile;
-
+float extrusionWidth = 0.3;
 int layerCount;
 size_t layerSize;
+float linewords[26];
 
+#define	LMASK(l) (1<<((l & ~0x20) - 'A'))
+#define	SEEN(c) ((seen & LMASK(c)) != 0)
+
+
+#define	LD_LISTGENERATED 1
 typedef struct {
 	char*	index;
 	int		size;
 	float	height;
+	uint8_t	flags;
 } layerData;
-
 layerData* layer;
 
+// FTGL stuff for drawing text
+FTGLfont* font = NULL;
 char *msgbuf;
 
+// SDL window and GL Viewport
+SDL_Surface* Surf_Display;
+int Surf_width;
+int Surf_height;
+
+// Current View settings
 int layerVelocity;
-
-FTGLfont* font = NULL;
-
 int currentLayer;
+float zoomFactor;
 
+int glListsBase = 0;
+
+// SDL Events Interface
 #define	KMM_LSHIFT 1
 #define KMM_RSHIFT 2
 #define	KMM_CTRL   4
 #define	KMM_ALT    8
 int keymodifiermask;
 
-float zoomFactor;
+#define	TIMER_KEYREPEAT 1
+#define	TIMER_DRAGRENDER 2
+SDL_TimerID timerKeyRepeat = NULL;
+SDL_TimerID timerDragRender = NULL;
+float gXmouseDown = 0.0, gYmouseDown = 0.0;
 
-float linewords[26];
+/***************************************************************************\
+*                                                                           *
+* Utility Functions                                                         *
+*                                                                           *
+\***************************************************************************/
 
 float minf(float a, float b) {
 	if (a < b)
@@ -96,9 +116,6 @@ void die(char* call, char* data) {
 	exit(1);
 }
 
-#define	TIMER_KEYREPEAT 1
-#define	TIMER_DRAGRENDER 2
-
 Uint32 timerCallback(Uint32 interval, void* param) {
 	SDL_Event e;
 	e.type = SDL_USEREVENT;
@@ -108,11 +125,15 @@ Uint32 timerCallback(Uint32 interval, void* param) {
 
 	SDL_PushEvent(&e);
 
-	return 50;
+	return 20;
 }
 
-#define	LMASK(l) (1<<((l & ~0x20) - 'A'))
-#define	SEEN(c) ((seen & LMASK(c)) != 0)
+/***************************************************************************\
+*                                                                           *
+* Read a single line of GCODE, extracting which words are present and their *
+* values                                                                    *
+*                                                                           *
+\***************************************************************************/
 
 uint32_t scanline(char *line, int length, float *words, char **end) {
 	int i = 0;
@@ -155,9 +176,14 @@ uint32_t scanline(char *line, int length, float *words, char **end) {
 	return seen;
 }
 
+/***************************************************************************\
+*                                                                           *
+* Draw a thick line (QUAD) given gcode coordinates, width and RGBA          *
+*                                                                           *
+\***************************************************************************/
+
 void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8_t g, uint8_t b, uint8_t a) {
 	#ifdef	OPENGL
-		glBegin(GL_QUADS);
 		glColor4f(((float) r) / 255.0, ((float) g) / 255.0, ((float) b) / 255.0, ((float) a) / 255.0);
 		//   c1x,c1y
 		//  0,0......
@@ -200,7 +226,6 @@ void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8
 		glVertex2f(c2x, c2y);
 		glVertex2f(c3x, c3y);
 		glVertex2f(c4x, c4y);
-		glEnd();
 	#else
 	thickLineRGBA(Surf_Display,
 		(x1 - viewPortL) * zoomFactor,
@@ -213,82 +238,99 @@ void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8
 	#endif
 }
 
+/***************************************************************************\
+*                                                                           *
+* Update the OpenGL display with the current layer                          *
+*                                                                           *
+\***************************************************************************/
+
 void render() {
 	#ifdef	OPENGL
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glLoadIdentity();
-		glPushMatrix();
-		glScalef(zoomFactor, zoomFactor, 0.0);
-		glTranslatef(-transX, -transY, 0.0);
+		if (layer[currentLayer].flags & LD_LISTGENERATED) {
+			glCallList(glListsBase + currentLayer);
+		}
+		else {
+//			printf("layer %d not drawn, drawing...\n", currentLayer);
+			glNewList(glListsBase + currentLayer, GL_COMPILE_AND_EXECUTE);
+			glPushMatrix();
+			glScalef(zoomFactor, zoomFactor, 0.0);
+			glTranslatef(-transX, -transY, 0.0);
+			glBegin(GL_QUADS);
 	#else
 		uint32_t yellow;
-	
+
 		yellow = SDL_MapRGB(Surf_Display->format, 224, 224, 128);
-	
+
 		SDL_LockSurface(Surf_Display);
 		SDL_FillRect(Surf_Display, NULL, yellow);
 		int lines = 0;
 	#endif
-		char *s = layer[currentLayer].index;
-		char *e = layer[currentLayer].index + layer[currentLayer].size;
-		float G = NAN, X = NAN, Y = NAN, E = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
-		uint32_t seen = 0;
+			char *s = layer[currentLayer].index;
+			char *e = layer[currentLayer].index + layer[currentLayer].size;
+			float G = NAN, X = NAN, Y = NAN, E = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
+			uint32_t seen = 0;
 
-		for (X = 0; X < 201.0; X += 10.0) {
-			gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
-			gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
-		}
-
-		while (s < e) {
-			seen = scanline(s, e - s, linewords, &s);
-			if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
-				if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
-					G = linewords['G' - 'A'];
-					X = linewords['X' - 'A'];
-					Y = linewords['Y' - 'A'];
-					E = linewords['E' - 'A'];
-					// draw
-					uint8_t r = 0, g = 0, b = 0, a = 224;
-					if (isnan(lastX))
-						lastX = X;
-					if (isnan(lastY))
-						lastY = Y;
-					if (isnan(lastE))
-						lastE = E;
-					if (SEEN('E') && (E > lastE)) {
-						r = 0;
-						g = 0;
-						b = 0;
-						a = 224;
-					}
-					else {
-						r = 0;
-						g = 128;
-						b = 64;
-						a = 160;
-					}
-					//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
-					if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
-						gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
-					//printf("drawn\n");
-				}
-				seen = 0;
-				//
-				lastX = X;
-				lastY = Y;
-				lastE = E;
+			for (X = 0; X < 201.0; X += 10.0) {
+				gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
+				gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
 			}
-		}
+
+			while (s < e) {
+				seen = scanline(s, e - s, linewords, &s);
+				if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
+					if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
+						G = linewords['G' - 'A'];
+						X = linewords['X' - 'A'];
+						Y = linewords['Y' - 'A'];
+						E = linewords['E' - 'A'];
+						// draw
+						uint8_t r = 0, g = 0, b = 0, a = 224;
+						if (isnan(lastX))
+							lastX = X;
+						if (isnan(lastY))
+							lastY = Y;
+						if (isnan(lastE))
+							lastE = E;
+						if (SEEN('E') && (E > lastE)) {
+							r = 0;
+							g = 0;
+							b = 0;
+							a = 224;
+						}
+						else {
+							r = 0;
+							g = 128;
+							b = 64;
+							a = 160;
+						}
+						//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
+						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
+							gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
+						//printf("drawn\n");
+					}
+					seen = 0;
+					//
+					lastX = X;
+					lastY = Y;
+					lastE = E;
+				}
+			}
 	#ifdef	OPENGL
-		glPopMatrix();
-		glPushMatrix();
-			glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
-			glScalef(0.3, 0.3, 1.0);
-			ftglSetFontFaceSize(font, 20, 20);
-			ftglRenderFont(font, msgbuf, FTGL_RENDER_ALL);
-		glPopMatrix();
-		glFlush();
-		glFinish();
+			glEnd();
+			glPopMatrix();
+			glEndList();
+			layer[currentLayer].flags |= LD_LISTGENERATED;
+		}
+			glPushMatrix();
+				glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
+				glScalef(0.3, 0.3, 1.0);
+				ftglSetFontFaceSize(font, 20, 20);
+				ftglRenderFont(font, msgbuf, FTGL_RENDER_ALL);
+			glPopMatrix();
+			glFlush();
+			glFinish();
 		SDL_GL_SwapBuffers();
 		glFinish();
 	#else
@@ -297,6 +339,14 @@ void render() {
 		SDL_Flip(Surf_Display);
 	#endif
 }
+
+/***************************************************************************\
+*                                                                           *
+* Resize the display                                                        *
+*                                                                           *
+* Includes refreshing the OpenGL Context                                    *
+*                                                                           *
+\***************************************************************************/
 
 void resize(int w, int h) {
 	Surf_width = w;
@@ -307,8 +357,13 @@ void resize(int w, int h) {
 			dim = h;
 		else
 			dim = w;
+
+		if (glListsBase)
+			glDeleteLists(glListsBase, layerCount);
+
 		if (Surf_Display != NULL)
 			SDL_FreeSurface(Surf_Display);
+
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_RESIZABLE | SDL_OPENGL);
 		w = Surf_Display->w; h = Surf_Display->h;
@@ -326,6 +381,8 @@ void resize(int w, int h) {
 		glDisable(GL_DEPTH_TEST);
 		glMatrixMode(GL_MODELVIEW);
 		glLoadIdentity();
+		glListsBase = glGenLists(layerCount);
+		for (int i = 0; i < layerCount; layer[i++].flags = 0);
 	#else
 		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_floatBUF | SDL_RESIZABLE);
 	#endif
@@ -337,12 +394,25 @@ void resize(int w, int h) {
 	render(); // redraw whole window
 }
 
+/***************************************************************************\
+*                                                                           *
+* Simple function to change current layer                                   *
+*                                                                           *
+\***************************************************************************/
+
 void drawLayer(int layerNum) {
 	snprintf(msgbuf, 256, "Layer %3d: %gmm", layerNum, layer[layerNum].height);
-	printf("Drawing layer %3d (%5.2f)\n", layerNum, layer[layerNum].height);
+//	printf("Drawing layer %3d (%5.2f)\n", layerNum, layer[layerNum].height);
 	currentLayer = layerNum;
 	render();
 }
+
+/***************************************************************************\
+*                                                                           *
+* Read lines from GCODE input file                                          *
+* Earmark the start of each layer in the file so we can find it quickly     *
+*                                                                           *
+\***************************************************************************/
 
 void scanLines() {
 	int l = 0;
@@ -401,6 +471,7 @@ void scanLines() {
 				if (i < 8) {
 					layer[layerCount].index = Zstack[i].start;
 					layer[layerCount].height = Zstack[i].Z;
+					layer[layerCount].flags = 0;
 					lastZ = layer[layerCount].height;
 					Zstack[0].start = layer[layerCount].index;
 					Zstack[0].Z = layer[layerCount].height;
@@ -450,9 +521,11 @@ void scanLines() {
 	layerSize = layerCount * sizeof(layerData);
 }
 
-SDL_TimerID timerKeyRepeat = NULL;
-SDL_TimerID timerDragRender = NULL;
-float gXmouseDown = 0.0, gYmouseDown = 0.0;
+/***************************************************************************\
+*                                                                           *
+* SDL Event Handlers                                                        *
+*                                                                           *
+\***************************************************************************/
 
 void handle_mousedown(SDL_MouseButtonEvent button) {
 	//printf("SDL Mousebutton down event: mouse %d, button %d, state %d, %dx%d\n", Event.button.which, Event.button.button, Event.button.state, Event.button.x, Event.button.y);
@@ -649,6 +722,15 @@ void handle_userevent(SDL_UserEvent user) {
 	}
 }
 
+/***************************************************************************\
+*                                                                           *
+* Main                                                                      *
+*                                                                           *
+* Read GCODE, Initialise SDL window and OpenGL surface, Start FTGL, run SDL *
+* Event loop                                                                *
+*                                                                           *
+\***************************************************************************/
+
 int main(int argc, char* argv[]) {
 	msgbuf = malloc(256);
 	msgbuf[0] = 0;
@@ -709,7 +791,10 @@ int main(int argc, char* argv[]) {
 	#ifdef	OPENGL
 		transX = transY = 0.0;
 		zoomFactor = 1.0;
+
 		resize(600, 600);
+
+		printf("list base at %d, %d lists available\n", glListsBase, layerCount);
 	#else
 		viewPortL = viewPortT = 0.0;
 		viewPortR = viewPortB = 200.0;
