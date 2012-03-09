@@ -248,15 +248,15 @@ void render() {
 	#ifdef	OPENGL
 		glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 		glLoadIdentity();
+		glPushMatrix();
+		glScalef(zoomFactor, zoomFactor, 0.0);
+		glTranslatef(-transX, -transY, 0.0);
 		if (layer[currentLayer].flags & LD_LISTGENERATED) {
 			glCallList(glListsBase + currentLayer);
 		}
 		else {
 //			printf("layer %d not drawn, drawing...\n", currentLayer);
 			glNewList(glListsBase + currentLayer, GL_COMPILE_AND_EXECUTE);
-			glPushMatrix();
-			glScalef(zoomFactor, zoomFactor, 0.0);
-			glTranslatef(-transX, -transY, 0.0);
 			glBegin(GL_QUADS);
 	#else
 		uint32_t yellow;
@@ -319,10 +319,10 @@ void render() {
 			}
 	#ifdef	OPENGL
 			glEnd();
-			glPopMatrix();
 			glEndList();
 			layer[currentLayer].flags |= LD_LISTGENERATED;
 		}
+			glPopMatrix();
 			glPushMatrix();
 				glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
 				glScalef(0.3, 0.3, 1.0);
