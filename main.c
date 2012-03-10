@@ -280,7 +280,6 @@ void render() {
 			glCallList(glListsBase + currentLayer);
 		}
 		else {
-//			printf("layer %d not drawn, drawing...\n", currentLayer);
 			glNewList(glListsBase + currentLayer, GL_COMPILE_AND_EXECUTE);
 			glBegin(GL_QUADS);
 	#else
@@ -294,7 +293,7 @@ void render() {
 	#endif
 			char *s = layer[currentLayer].index;
 			char *e = layer[currentLayer].index + layer[currentLayer].size;
-			float G = NAN, X = NAN, Y = NAN, E = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
+			float G = NAN, X = NAN, Y = NAN, E = NAN, Z = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
 			uint32_t seen = 0;
 
 			for (X = 0; X < 201.0; X += 10.0) {
@@ -309,6 +308,7 @@ void render() {
 						G = linewords['G' - 'A'];
 						X = linewords['X' - 'A'];
 						Y = linewords['Y' - 'A'];
+						Z = linewords['Z' - 'A'];
 						E = linewords['E' - 'A'];
 						// draw
 						uint8_t r = 0, g = 0, b = 0, a = 224;
@@ -324,19 +324,22 @@ void render() {
 							b = 0;
 							a = 224;
 						}
+						else if (Z != layer[currentLayer].height) {
+							r = 224;
+							g = 64;
+							b = 64;
+							a = 160;
+						}
 						else {
 							r = 0;
 							g = 128;
 							b = 64;
 							a = 160;
 						}
-						//printf("%5d lines, %6d of %6d\n", ++lines, s - layerIndex[currentLayer], e - layerIndex[currentLayer]);
 						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
 							gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
-						//printf("drawn\n");
 					}
 					seen = 0;
-					//
 					lastX = X;
 					lastY = Y;
 					lastE = E;
@@ -448,7 +451,6 @@ void scanLines() {
 	// preallocate for 128 layers, we double the size later if it's not enough
 	layerSize = (128 * sizeof(layerData));
 	layer = malloc(layerSize);
-	//printf("allocated %d bytes (%d entries)\n", layerSize, layerSize / sizeof(layerData));
 
 	char *end;
 	uint32_t seen;
@@ -462,13 +464,10 @@ void scanLines() {
 
 	while (l < filesz) {
 		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
-		//printf("found line %d chars long at %d. G:%d Z:%d E:%d\n", end - &gcodefile[l], l, seen & LMASK('G')?1:0, seen & LMASK('Z')?1:0, seen & LMASK('E')?1:0);
 
 		G = linewords['G' - 'A'];
 		Z = linewords['Z' - 'A'];
 		E = linewords['E' - 'A'];
-
-		//printf("G%g Z%g E%g\n", G, Z, E);
 
 		if (((seen & LMASK('G')) != 0) && (G == 0.0 || G == 1.0)) {
 			if ((seen & LMASK('Z')) != 0) {
@@ -478,7 +477,7 @@ void scanLines() {
 						break;
 					}
 				}
-				//printf("Zstack: %d\n", ZstackIndex);
+				printf("Zstack: %d (%g)\n", ZstackIndex, Z);
 				Zstack[ZstackIndex].start = &gcodefile[l];
 				Zstack[ZstackIndex].Z = Z;
 				if (ZstackIndex < 8 - 1)
@@ -492,7 +491,6 @@ void scanLines() {
 					if (Zstack[i].Z == Z)
 						break;
 				}
-				//printf("Got G%g and E%g in same line! Zstack is at %d (%d) and that layer starts at char %d\n", G, E, ZstackIndex, i, Zstack[i].start - gcodefile); // exit(1);
 				if (i < 8) {
 					layer[layerCount].index = Zstack[i].start;
 					layer[layerCount].height = Zstack[i].Z;
@@ -501,12 +499,10 @@ void scanLines() {
 					Zstack[0].start = layer[layerCount].index;
 					Zstack[0].Z = layer[layerCount].height;
 					ZstackIndex = 1;
-					//printf("LAYER %d RECORDED\n", layerCount);
 					if (layerCount > 0)
 						layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
 					layerCount++;
 					if ((layerCount + 1) * sizeof(layerData) > layerSize) {
-						//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
 						layer = realloc(layer, layerSize << 1);
 						if (layer == NULL)
 							die("Scan: realloc layer","");
@@ -518,25 +514,31 @@ void scanLines() {
 			}
 		}
 		l = end - gcodefile;
+	}
 
-		#if 0
-			layer[layerCount].index = &gcodefile[ls];
-			layer[layerCount].height = zvalue;
-			if (layerCount > 0)
-				layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
+	//for (int i = ZstackIndex - 1; i >= 0; i--) {
+	//	printf("Zstack %d:\n\tindex %d\n\theight %g\n", i, Zstack[i].start - gcodefile, Zstack[i].Z);
+	//}
+
+	if (layerCount == 0) {
+		if (ZstackIndex) {
+			//printf("only one layer found!\n");
+			layer[layerCount].index = gcodefile;
+			layer[layerCount].height = Zstack[0].Z;
+			layer[layerCount].flags = 0;
+			layer[layerCount].size = filesz;
+			//printf("layer starts at %d (of %d) and is %d long and is %g high\n", layer[layerCount].index - gcodefile, filesz, layer[layerCount].size, layer[layerCount].height);
 			layerCount++;
-			if ((layerCount + 1) * sizeof(layerData) > layerSize) {
-				//printf("reallocating layer buffer to %d bytes (%d entries)\n", layerSize << 1, (layerSize << 1) / sizeof(layerData));
-				layer = realloc(layer, layerSize << 1);
-				if (layer == NULL)
-					die("Scan: realloc layer","");
-				layerSize <<= 1;
-			}
-		#endif
+		}
+		else {
+			die("No layers detected in input file!","");
+		}
 	}
 
 	if (layerCount > 0)
 		layer[layerCount - 1].size = &gcodefile[filesz] - layer[layerCount - 1].index;
+	else
+		exit(0);
 
 	printf("%d layers OK\n", layerCount);
 
