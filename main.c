@@ -104,7 +104,18 @@ float gXmouseDown = 0.0, gYmouseDown = 0.0;
 \***************************************************************************/
 
 void display_usage() {
-	printf("USAGE: gcodeview [-w|--width width] [-l|--layer layer] <file.gcode>\n\n\twidth:\n\t\tExtrusion Width used to draw lines\n\n\tlayer:\n\t\tRender this layer first\n");
+	printf("\n");
+	printf("USAGE: gcodeview [-w|--width width] [-l|--layer layer] <file.gcode>\n");
+	printf("\n");
+	printf("\twidth: Extrusion Width used to draw lines\n");
+	printf("\tlayer: Render this layer first\n");
+	printf("\n");
+	printf("Color Key:\n");
+	printf("\n");
+	printf("\tBlack: Extrusion move at current layer height\n");
+	printf("\tGreen: Travel move at current layer height\n");
+	printf("\tRed:   Travel move at different layer height (ie hop/z-lift)\n");
+	printf("\n");
 	exit(0);
 }
 
