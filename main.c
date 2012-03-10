@@ -16,6 +16,7 @@
 #include	<errno.h>
 #include	<string.h>
 #include	<fcntl.h>
+#include	<getopt.h>
 
 #include	<SDL/SDL.h>
 #include	<FTGL/ftgl.h>
@@ -35,8 +36,16 @@
 	float viewPortL, viewPortR, viewPortT, viewPortB;
 #endif
 
-
+// main loop fall-through flag
 bool Running;
+
+// getopt stuff
+static const char *optString = "l:w:h?";
+static const struct option longOpts[] = {
+	{ "layer", required_argument, NULL, 'l' },
+	{ "width", required_argument, NULL, 'w' },
+	{ 0      , 0                , 0   , 0   }
+};
 
 // GCODE file related stuff
 int filesz;
@@ -93,6 +102,11 @@ float gXmouseDown = 0.0, gYmouseDown = 0.0;
 * Utility Functions                                                         *
 *                                                                           *
 \***************************************************************************/
+
+void display_usage() {
+	printf("USAGE: gcodeview [-w|--width width] [-l|--layer layer] <file.gcode>\n\n\twidth:\n\t\tExtrusion Width used to draw lines\n\n\tlayer:\n\t\tRender this layer first\n");
+	exit(0);
+}
 
 float minf(float a, float b) {
 	if (a < b)
@@ -735,26 +749,62 @@ int main(int argc, char* argv[]) {
 	msgbuf = malloc(256);
 	msgbuf[0] = 0;
 
-	if (argc == 1) {
-		printf("USAGE: gcodeview <file>\n");
-		return 0;
-	}
+	currentLayer = 0;
 
-	int fd = open(argv[1], 0);
+	int longIndex;
+	int opt;
+	do {
+		opt = getopt_long(argc, argv, optString, longOpts, &longIndex);
+		if (opt != -1) {
+			switch( opt ) {
+				case 'l':
+					currentLayer = strtol(optarg, NULL, 10);
+					break;
+
+				case 'w':
+					extrusionWidth = strtof(optarg, NULL);
+					break;
+
+				case 'h':   /* fall-through is intentional */
+				case '?':
+					display_usage();
+					break;
+
+				case 0:     /* long option without a short arg */
+					//if( strcmp( "randomize", longOpts[longIndex].name ) == 0 ) {
+					//	globalArgs.randomized = 1;
+					//}
+					break;
+
+				default:
+					/* You won't actually get here. */
+					break;
+			}
+		}
+	}
+	while (opt != -1);
+
+	if (optind >= argc)
+		display_usage();
+
+	int fd = open(argv[optind], 0);
 	if (fd == -1)
-		die("Open ", argv[1]);
+		die("Open ", argv[optind]);
 
 	struct stat filestats;
 	if (fstat(fd, &filestats) == -1)
-		die("fstat ", argv[1]);
+		die("fstat ", argv[optind]);
 
 	filesz = filestats.st_size;
 
 	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
 	if (gcodefile == MAP_FAILED)
-		die("mmap ", argv[1]);
+		die("mmap ", argv[optind]);
 
 	scanLines();
+
+	if (currentLayer >= layerCount)
+		currentLayer = layerCount - 1;
 
 	//for (int i = 0; i < layerCount; i++)
 	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layer[i].index - gcodefile, layer[i].size);
@@ -804,7 +854,7 @@ int main(int argc, char* argv[]) {
 
 	SDL_WM_SetCaption("gcodeview", 0);
 
-	drawLayer(0);
+	drawLayer(currentLayer);
 
 	layerVelocity = 0;
 
