@@ -477,7 +477,7 @@ void scanLines() {
 						break;
 					}
 				}
-				printf("Zstack: %d (%g)\n", ZstackIndex, Z);
+				//printf("Zstack: %d (%g)\n", ZstackIndex, Z);
 				Zstack[ZstackIndex].start = &gcodefile[l];
 				Zstack[ZstackIndex].Z = Z;
 				if (ZstackIndex < 8 - 1)
