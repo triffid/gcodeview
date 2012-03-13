@@ -290,6 +290,76 @@ void gline(float x1, float y1, float x2, float y2, float width, uint8_t r, uint8
 
 /***************************************************************************\
 *                                                                           *
+* create the quads for a layer, no wrappers                                 *
+*                                                                           *
+\***************************************************************************/
+
+void render_layer(int clayer, float alpha) {
+	char *s = layer[clayer].index;
+	char *e = layer[clayer].index + layer[clayer].size;
+	float G = NAN, X = NAN, Y = NAN, E = NAN, Z = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
+	uint32_t seen = 0;
+
+	for (X = 0; X < 201.0; X += 10.0) {
+		gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
+		gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
+	}
+
+	while (s < e) {
+		seen = scanline(s, e - s, linewords, &s);
+		if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
+			if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
+				G = linewords['G' - 'A'];
+				X = linewords['X' - 'A'];
+				Y = linewords['Y' - 'A'];
+				Z = linewords['Z' - 'A'];
+				E = linewords['E' - 'A'];
+				// draw
+				uint8_t r = 0, g = 0, b = 0, a = 224;
+				if (isnan(lastX))
+					lastX = X;
+				if (isnan(lastY))
+					lastY = Y;
+				if (isnan(lastE))
+					lastE = E;
+				if (SEEN('E') && (E > lastE)) {
+					r = 0;
+					g = 0;
+					b = 0;
+					a = 224;
+				}
+				else if (Z != layer[clayer].height) {
+					if (Z > layer[clayer].height) {
+						r = 224;
+						g = 64;
+						b = 64;
+					}
+					else {
+						r = 128;
+						g = 0;
+						b = 128;
+					}
+					a = 160;
+				}
+				else {
+					r = 0;
+					g = 128;
+					b = 64;
+					a = 160;
+				}
+				if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
+					gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a * alpha);
+			}
+			seen = 0;
+			lastX = X;
+			lastY = Y;
+			lastE = E;
+		}
+	}
+}
+
+/***************************************************************************\
+*                                                                           *
 * Update the OpenGL display with the current layer                          *
 *                                                                           *
 \***************************************************************************/
@@ -316,60 +386,9 @@ void render() {
 		SDL_FillRect(Surf_Display, NULL, yellow);
 		int lines = 0;
 	#endif
-			char *s = layer[currentLayer].index;
-			char *e = layer[currentLayer].index + layer[currentLayer].size;
-			float G = NAN, X = NAN, Y = NAN, E = NAN, Z = NAN, lastX = NAN, lastY = NAN, lastE = NAN;
-			uint32_t seen = 0;
 
-			for (X = 0; X < 201.0; X += 10.0) {
-				gline(X, 0, X, 200, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
-				gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
-			}
+	render_layer(currentLayer, 1.0);
 
-			while (s < e) {
-				seen = scanline(s, e - s, linewords, &s);
-				if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
-					if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
-						G = linewords['G' - 'A'];
-						X = linewords['X' - 'A'];
-						Y = linewords['Y' - 'A'];
-						Z = linewords['Z' - 'A'];
-						E = linewords['E' - 'A'];
-						// draw
-						uint8_t r = 0, g = 0, b = 0, a = 224;
-						if (isnan(lastX))
-							lastX = X;
-						if (isnan(lastY))
-							lastY = Y;
-						if (isnan(lastE))
-							lastE = E;
-						if (SEEN('E') && (E > lastE)) {
-							r = 0;
-							g = 0;
-							b = 0;
-							a = 224;
-						}
-						else if (Z != layer[currentLayer].height) {
-							r = 224;
-							g = 64;
-							b = 64;
-							a = 160;
-						}
-						else {
-							r = 0;
-							g = 128;
-							b = 64;
-							a = 160;
-						}
-						if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
-							gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a);
-					}
-					seen = 0;
-					lastX = X;
-					lastY = Y;
-					lastE = E;
-				}
-			}
 	#ifdef	OPENGL
 			glEnd();
 			glEndList();
