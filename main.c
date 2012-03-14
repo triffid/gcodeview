@@ -390,7 +390,6 @@ void render() {
 	#define SHADOW_LAYERS 3
 	#define	SHADOW_ALPHA  0.2
 	for (int i = SHADOW_LAYERS; i >= 1; i--) {
-		printf("i %d\n", i);
 		if (currentLayer - i > 0)
 			render_layer(currentLayer - i, SHADOW_ALPHA - (i - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
 	}
