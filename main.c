@@ -224,7 +224,13 @@ void dumpZstack() {
 *                                                                           *
 \***************************************************************************/
 
-uint32_t scanline(char *line, int length, float *words, char **end) {
+void findEndFloat(char *c, char **end) {
+	while ((c >= '0' && c <= '9') || (c == '.') || (c == 'e') || (c == '-') || (c == '+'))
+		c++;
+	&end = c;
+}
+
+uint32_t scanline(char *line, int length, float *words, char **end, uint32_t interest_mask) {
 	int i = 0;
 	uint32_t seen = 0;
 
@@ -250,10 +256,17 @@ uint32_t scanline(char *line, int length, float *words, char **end) {
 					c &= ~0x20;
 				if (c >= 'A' && c <= 'Z') {
 					char *e;
-					float v = strtof(&line[i + 1], &e);
-					if (e > &line[i + 1]) {
+					if (LMASK(c) & interest_mask) {
+						float v = strtof(&line[i + 1], &e);
+						if (e > &line[i + 1]) {
+							seen |= LMASK(c);
+							words[c - 'A'] = v;
+							i = e - line - 1;
+						}
+					}
+					else {
 						seen |= LMASK(c);
-						words[c - 'A'] = v;
+						findEndFloat(&line[i + 1], &e);
 						i = e - line - 1;
 					}
 				}
@@ -352,7 +365,7 @@ void render_layer(int clayer, float alpha) {
 	lastE = layer[clayer].startE;
 
 	while (s < e) {
-		seen = scanline(s, e - s, linewords, &s);
+		seen = scanline(s, e - s, linewords, &s, LMASK('G') | LMASK('X') | LMASK('Y') | LMASK('Z') | LMASK('E'));
 		if (SEEN('G') && (LW('G') == 0.0 || LW('G') == 1.0)) {
 			G = LW('G');
 			if (SEEN('X'))
@@ -549,7 +562,7 @@ void scanLine() {
 
 	if (l < gcodefile_end) {
 		//printf("\t-\n");
-		seen = scanline(l, gcodefile_end - l, linewords, &end);
+		seen = scanline(l, gcodefile_end - l, linewords, &end, LMASK('G') | LMASK('X') | LMASK('Y') | LMASK('Z') | LMASK('E'));
 
 		if (SEEN('G')) {
 			if (LW('G') == 0.0 || LW('G') == 1.0) {
