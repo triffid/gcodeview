@@ -84,6 +84,7 @@ static const struct option longOpts[] = {
 // GCODE file related stuff
 int filesz;
 char* gcodefile;
+char* gcodefile_end;
 float extrusionWidth = 0.3;
 int layerCount;
 size_t layerSize;
@@ -91,14 +92,16 @@ float linewords[26];
 
 // for tracking hop/z-lift moves
 int ZstackIndex = 0;
-struct {
+typedef struct {
 	char *start;
-	float Z;
-} Zstack[8];
+	float E, X, Y, Z;
+} ZstackItem;
+ZstackItem Zstack[8];
 
 
 #define	LMASK(l) (1<<((l & ~0x20) - 'A'))
 #define	SEEN(c) ((seen & LMASK(c)) != 0)
+#define	LW(c)	linewords[c -'A']
 
 
 #define	LD_LISTGENERATED 1
@@ -107,6 +110,13 @@ typedef struct {
 	int		size;
 	float	height;
 	uint8_t	flags;
+	int		glList;
+	float	startX;
+	float	startY;
+	float	startE;
+	float 	endX;
+	float 	endY;
+	float	endE;
 } layerData;
 layerData* layer;
 
@@ -124,7 +134,7 @@ int layerVelocity;
 int currentLayer;
 float zoomFactor;
 
-int glListsBase = 0;
+//int glListsBase = 0;
 
 // SDL Events Interface
 #define	KMM_LSHIFT 1
@@ -196,6 +206,15 @@ Uint32 timerCallback(Uint32 interval, void* param) {
 	SDL_PushEvent(&e);
 
 	return 0;
+}
+
+void dumpZstack() {
+	printf("Zstack has %d entries:\n", ZstackIndex);
+	for (int i = 0; i < ZstackIndex; i++) {
+		printf("Zstack %d:\n", i);
+		printf("\tstart: %d\n", Zstack[i].start - gcodefile);
+		printf("\tX: %g\n\tY: %g\n\tZ: %g\n", Zstack[i].X, Zstack[i].Y, Zstack[i].Z);
+	}
 }
 
 /***************************************************************************\
@@ -325,40 +344,46 @@ void render_layer(int clayer, float alpha) {
 		gline(0, X, 200, X, ((((int) X) % 50) == 0)?1:0.2, 0, 0, 0, 16);
 	}
 
+	//printf("render layer %d (%g)\n", clayer + 1, alpha);
+
+	lastX = layer[clayer].startX;
+	lastY = layer[clayer].startY;
+	Z = layer[clayer].height;
+	lastE = layer[clayer].startE;
+
 	while (s < e) {
 		seen = scanline(s, e - s, linewords, &s);
-		if (SEEN('G') && (SEEN('X') || SEEN('Y'))) {
-			if (linewords['G' - 'A'] == 0.0 || linewords['G' - 'A'] == 1.0) {
-				G = linewords['G' - 'A'];
-				X = linewords['X' - 'A'];
-				Y = linewords['Y' - 'A'];
-				Z = linewords['Z' - 'A'];
-				E = linewords['E' - 'A'];
+		if (SEEN('G') && (LW('G') == 0.0 || LW('G') == 1.0)) {
+			G = LW('G');
+			if (SEEN('X'))
+				X = LW('X');
+			if (SEEN('Y'))
+				Y = LW('Y');
+			if (SEEN('Z'))
+				Z = LW('Z');
+			if (SEEN('E'))
+				E = LW('E');
+			//if (clayer == 2)
+			//	printf("SEEN %c%c%c%c X%g Y%g Z%g E%g\n", SEEN('X')?'X':' ', SEEN('Y')?'Y':' ', SEEN('Z')?'Z':' ', SEEN('E')?'E':' ', X, Y, Z, E);
+			if (SEEN('X') || SEEN('Y')) {
 				// draw
-				uint8_t r = 0, g = 0, b = 0, a = 224;
-				if (isnan(lastX))
-					lastX = X;
-				if (isnan(lastY))
-					lastY = Y;
-				if (isnan(lastE))
-					lastE = E;
-				if (SEEN('E') && (E > lastE)) {
+				uint8_t r = 0, g = 0, b = 0, a = 160;
+				if (SEEN('E')) {
 					r = 0;
 					g = 0;
 					b = 0;
 					a = 224;
 				}
-				else if (Z != layer[clayer].height) {
-					if (Z > layer[clayer].height) {
-						r = 224;
-						g = 64;
-						b = 64;
-					}
-					else {
-						r = 128;
-						g = 0;
-						b = 128;
-					}
+				else if (Z > layer[clayer].height) {
+					r = 224;
+					g = 64;
+					b = 64;
+					a = 160;
+				}
+				else if (Z < layer[clayer].height) {
+					r = 128;
+					g = 0;
+					b = 128;
 					a = 160;
 				}
 				else {
@@ -370,10 +395,12 @@ void render_layer(int clayer, float alpha) {
 				if ((lastX != X || lastY != Y) && !isnan(X) && !isnan(Y) && lastX <= 200.0)
 					gline(lastX, lastY, X, Y, extrusionWidth, r, g, b, a * alpha);
 			}
-			seen = 0;
-			lastX = X;
-			lastY = Y;
-			lastE = E;
+			if (SEEN('X'))
+				lastX = X;
+			if (SEEN('Y'))
+				lastY = Y;
+			if (SEEN('E'))
+				lastE = E;
 		}
 	}
 }
@@ -391,11 +418,12 @@ void render() {
 		glPushMatrix();
 		glScalef(zoomFactor, zoomFactor, 0.0);
 		glTranslatef(-transX, -transY, 0.0);
-		if (layer[currentLayer].flags & LD_LISTGENERATED) {
-			glCallList(glListsBase + currentLayer);
+		if (layer[currentLayer].glList) {
+			glCallList(layer[currentLayer].glList);
 		}
 		else {
-			glNewList(glListsBase + currentLayer, GL_COMPILE_AND_EXECUTE);
+			layer[currentLayer].glList = glGenLists(1);
+			glNewList(layer[currentLayer].glList, GL_COMPILE_AND_EXECUTE);
 			glBegin(GL_QUADS);
 	#else
 		uint32_t yellow;
@@ -407,26 +435,26 @@ void render() {
 		int lines = 0;
 	#endif
 
-	for (int i = SHADOW_LAYERS; i >= 1; i--) {
-		if (currentLayer - i > 0)
-			render_layer(currentLayer - i, SHADOW_ALPHA - (i - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
-	}
-	render_layer(currentLayer, 1.0);
+			for (int i = SHADOW_LAYERS; i >= 1; i--) {
+				if (currentLayer - i > 0)
+					render_layer(currentLayer - i, SHADOW_ALPHA - (i - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
+			}
+			render_layer(currentLayer, 1.0);
 
 	#ifdef	OPENGL
 			glEnd();
 			glEndList();
 			layer[currentLayer].flags |= LD_LISTGENERATED;
 		}
-			glPopMatrix();
-			glPushMatrix();
-				glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
-				glScalef(0.3, 0.3, 1.0);
-				ftglSetFontFaceSize(font, 20, 20);
-				ftglRenderFont(font, msgbuf, FTGL_RENDER_ALL);
-			glPopMatrix();
-			glFlush();
-			glFinish();
+		glPopMatrix();
+		glPushMatrix();
+			glTranslatef(0.0, 200.0 - (20.0 * 0.3), 0.0);
+			glScalef(0.3, 0.3, 1.0);
+			ftglSetFontFaceSize(font, 20, 20);
+			ftglRenderFont(font, msgbuf, FTGL_RENDER_ALL);
+		glPopMatrix();
+		glFlush();
+		glFinish();
 		SDL_GL_SwapBuffers();
 		glFinish();
 	#else
@@ -454,8 +482,7 @@ void resize(int w, int h) {
 		else
 			dim = w;
 
-		if (glListsBase)
-			glDeleteLists(glListsBase, layerCount);
+		for (int i = 0; i < layerCount; glDeleteLists(layer[i].glList, 1), layer[i].glList = 0, layer[i++].flags = 0);
 
 		if (Surf_Display != NULL)
 			SDL_FreeSurface(Surf_Display);
@@ -477,8 +504,7 @@ void resize(int w, int h) {
 		glDisable(GL_DEPTH_TEST);
 		glMatrixMode(GL_MODELVIEW);
 		glLoadIdentity();
-		glListsBase = glGenLists(layerCount);
-		for (int i = 0; i < layerCount; layer[i++].flags = 0);
+		busy |= BUSY_RENDER;
 	#else
 		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_floatBUF | SDL_RESIZABLE);
 	#endif
@@ -497,7 +523,9 @@ void resize(int w, int h) {
 \***************************************************************************/
 
 void drawLayer(int layerNum) {
-	snprintf(msgbuf, 256, "Layer %3d: %gmm", layerNum, layer[layerNum].height);
+	if (layerNum > layerCount)
+		layerNum = layerCount;
+	snprintf(msgbuf, 256, "Layer %3d: %gmm", layerNum + 1, layer[layerNum].height);
 //	printf("Drawing layer %3d (%5.2f)\n", layerNum, layer[layerNum].height);
 	currentLayer = layerNum;
 	render();
@@ -511,195 +539,148 @@ void drawLayer(int layerNum) {
 \***************************************************************************/
 
 void scanLine() {
-	static int l = 0;
-	static float lastZ = 0.0;
+	static char* l = NULL;
+	static float lastX = 0.0, lastY = 0.0, lastE = 0.0;
 
-	uint32_t seen = 0;
-	char *end;
-	float G, Z, E;
+	if (l == NULL)
+		l = gcodefile;
+	char* end;
+	uint32_t seen;
 
-	if (l <= filesz) {
-		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
+	if (l < gcodefile_end) {
+		//printf("\t-\n");
+		seen = scanline(l, gcodefile_end - l, linewords, &end);
 
-		G = linewords['G' - 'A'];
-		Z = linewords['Z' - 'A'];
-		E = linewords['E' - 'A'];
-
-		if (((seen & LMASK('G')) != 0) && (G == 0.0 || G == 1.0)) {
-			if ((seen & LMASK('Z')) != 0) {
-				for (int i = 0; i < ZstackIndex; i++) {
-					if (Zstack[i].Z == Z) {
-						ZstackIndex = i;
-						break;
+		if (SEEN('G')) {
+			if (LW('G') == 0.0 || LW('G') == 1.0) {
+				if (layer[layerCount].index == NULL) {
+					layer[layerCount].index = l;
+					layer[layerCount].startX = lastX;
+					layer[layerCount].startY = lastY;
+					layer[layerCount].startE = lastE;
+				}
+				if (SEEN('Z')) {
+					//dumpZstack();
+					//printf("%d: Z%g\n", l - gcodefile, LW('Z'));
+					if (layer[layerCount].height == NAN)
+						layer[layerCount].height = LW('Z');
+					else {
+						int i;
+						//dumpZstack();
+						for (i = 0; i < ZstackIndex; i++) {
+							//printf("Check %d: got %g vs found %g\n", i, Zstack[i].Z, LW('Z'));
+							if (Zstack[i].Z == LW('Z')) {
+								//printf("found end of hop\n");
+								// end of hop
+								ZstackIndex = i + 1;
+								break;
+							}
+						}
+						//printf("ZS %d i %d\n", ZstackIndex, i);
+						if (i >= ZstackIndex || ZstackIndex == 0) {
+							//printf("found start of hop\n");
+							// start of hop or new layer
+							Zstack[ZstackIndex].start = l;
+							Zstack[ZstackIndex].X = lastX;
+							Zstack[ZstackIndex].Y = lastY;
+							Zstack[ZstackIndex].Z = LW('Z');
+							Zstack[ZstackIndex].E = lastE;
+							ZstackIndex++;
+							if (ZstackIndex >= 8)
+								die("Zstack overflow!","");
+						}
 					}
 				}
-				//printf("Zstack: %d (%g)\n", ZstackIndex, Z);
-				Zstack[ZstackIndex].start = &gcodefile[l];
-				Zstack[ZstackIndex].Z = Z;
-				if (ZstackIndex < 8 - 1)
-					ZstackIndex++;
-				else
-					die("overflow while checking if Z moves are related to hop","");
-			}
-			if (((seen & LMASK('E')) != 0) && (ZstackIndex > 0) && (Z != lastZ)) {
-				int i;
-				for (i = 0; i < ZstackIndex; i++) {
-					if (Zstack[i].Z == Z)
-						break;
-				}
-				if (i < 8) {
-					layer[layerCount].index = Zstack[i].start;
-					layer[layerCount].height = Zstack[i].Z;
-					layer[layerCount].flags = 0;
-					lastZ = layer[layerCount].height;
-					Zstack[0].start = layer[layerCount].index;
-					Zstack[0].Z = layer[layerCount].height;
-					ZstackIndex = 1;
-					if (layerCount > 0)
-						layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
-					layerCount++;
-					if ((layerCount + 1) * sizeof(layerData) > layerSize) {
-						layer = realloc(layer, layerSize << 1);
-						if (layer == NULL)
-							die("Scan: realloc layer","");
-						layerSize <<= 1;
+				if (SEEN('E')) {
+					// extrusion, collapse Z stack
+					int i = ZstackIndex - 1;
+					if (Zstack[i].Z != layer[layerCount].height) {
+						//printf("E word at Z=%g\n", LW('Z'));
+						//dumpZstack();
+						//printf("new layer!\n");
+						// finish previous layer
+						layer[layerCount].size = Zstack[i].start - layer[layerCount].index;
+						layer[layerCount].flags = 0;
+						layer[layerCount].glList = 0;
+						layer[layerCount].endX = Zstack[i].X;
+						layer[layerCount].endY = Zstack[i].Y;
+						layer[layerCount].endE = Zstack[i].E;
+
+						// start new layer
+						layerCount++;
+						//printf("NEW LAYER: %d\n", layerCount);
+						if (layerCount * sizeof(layerData) >= layerSize) {
+							layerSize <<= 1;
+							layer = realloc(layer, layerSize);
+							if (layer == NULL)
+								die("Scan: realloc layer","");
+						}
+						//printf("START LAYER %d\n", layerCount);
+						// initialise
+						layer[layerCount].index = Zstack[i].start;
+						layer[layerCount].startX = Zstack[i].X;
+						layer[layerCount].startY = Zstack[i].Y;
+						layer[layerCount].height = Zstack[i].Z;
+						layer[layerCount].startE = Zstack[i].E;
+						// flush Z stack
+						memcpy(Zstack, &Zstack[i], sizeof(ZstackItem));
+						ZstackIndex = 1;
+						//dumpZstack();
 					}
 				}
-				else
-					die("Zstack: can't find Z value in stack!","this should never happen");
 			}
+			if (SEEN('X'))
+				lastX = LW('X');
+			if (SEEN('Y'))
+				lastY = LW('Y');
+			if (SEEN('E'))
+				lastE = LW('E');
 		}
-		l = end - gcodefile;
+		l = end;
 	}
+	if (l >= gcodefile_end) {
+		layer[layerCount].size = l - layer[layerCount].index;
+		layer[layerCount].flags = 0;
+		layer[layerCount].glList = 0;
+		layer[layerCount].endX = lastX;
+		layer[layerCount].endY = lastY;
+		layer[layerCount].endE = lastE;
+		layerCount++;
 
-	if (l >= filesz) {
-		if (layerCount == 0) {
-			if (ZstackIndex) {
-				layer[layerCount].index = gcodefile;
-				layer[layerCount].height = Zstack[0].Z;
-				layer[layerCount].flags = 0;
-				layer[layerCount].size = filesz;
-				layerCount++;
-			}
-			else {
-				die("No layers detected in input file!","");
-			}
+		printf("Found %d layers\n", layerCount);
+
+		if (0)
+		for (int i = 0; i < layerCount; i++) {
+			printf("Layer %d at %d+%d=%d\n", i, layer[i].index - gcodefile, layer[i].size, layer[i].index - gcodefile + layer[i].size);
+			printf("\tHeight:   %g\n", layer[i].height);
+			printf("\tStarts at [%g,%g:%g]\n", layer[i].startX, layer[i].startY, layer[i].startE);
+			printf("\tEnds   at [%g,%g:%g]\n", layer[i].endX, layer[i].endY, layer[i].endE);
 		}
 
-		if (layerCount > 0)
-			layer[layerCount - 1].size = &gcodefile[filesz] - layer[layerCount - 1].index;
-		else
-			exit(0);
-
-		printf("%d layers OK\n", layerCount);
-
-		layer = realloc(layer, layerCount * sizeof(layerData));
-		if (layer == NULL)
-			die("Scan: realloc layer","");
-		layerSize = layerCount * sizeof(layerData);
-
-		busy = (busy & ~BUSY_SCANFILE) | BUSY_RENDER;
+		busy &= ~BUSY_SCANFILE;
 	}
 }
 
+// quickly finds user-specified layer before first render
 void scanLines() {
-	int l = 0;
-
-	printf("Indexing lines... ");
+	printf("Indexing lines...\n");
 
 	layerCount = 0;
 	// preallocate for 128 layers, we double the size later if it's not enough
 	layerSize = (128 * sizeof(layerData));
 	layer = malloc(layerSize);
 
-	char *end;
-	uint32_t seen;
-	float G, Z, lastZ = 0.0, E;
+	layer[0].startX = NAN;
+	layer[0].startY = NAN;
+	layer[0].index = NULL;
 
-	while (l < filesz) {
-		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
+	ZstackIndex = 0;
 
-		G = linewords['G' - 'A'];
-		Z = linewords['Z' - 'A'];
-		E = linewords['E' - 'A'];
-
-		if (((seen & LMASK('G')) != 0) && (G == 0.0 || G == 1.0)) {
-			if ((seen & LMASK('Z')) != 0) {
-				for (int i = 0; i < ZstackIndex; i++) {
-					if (Zstack[i].Z == Z) {
-						ZstackIndex = i;
-						break;
-					}
-				}
-				//printf("Zstack: %d (%g)\n", ZstackIndex, Z);
-				Zstack[ZstackIndex].start = &gcodefile[l];
-				Zstack[ZstackIndex].Z = Z;
-				if (ZstackIndex < 8 - 1)
-					ZstackIndex++;
-				else
-					die("overflow while checking if Z moves are related to hop","");
-			}
-			if (((seen & LMASK('E')) != 0) && (ZstackIndex > 0) && (Z != lastZ)) {
-				int i;
-				for (i = 0; i < ZstackIndex; i++) {
-					if (Zstack[i].Z == Z)
-						break;
-				}
-				if (i < 8) {
-					layer[layerCount].index = Zstack[i].start;
-					layer[layerCount].height = Zstack[i].Z;
-					layer[layerCount].flags = 0;
-					lastZ = layer[layerCount].height;
-					Zstack[0].start = layer[layerCount].index;
-					Zstack[0].Z = layer[layerCount].height;
-					ZstackIndex = 1;
-					if (layerCount > 0)
-						layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
-					layerCount++;
-					if ((layerCount + 1) * sizeof(layerData) > layerSize) {
-						layer = realloc(layer, layerSize << 1);
-						if (layer == NULL)
-							die("Scan: realloc layer","");
-						layerSize <<= 1;
-					}
-				}
-				else
-					die("Zstack: can't find Z value in stack!","this should never happen");
-			}
-		}
-		l = end - gcodefile;
+	while ((busy & BUSY_SCANFILE) && ((layerCount - 2) <= currentLayer)) {
+		scanLine();
 	}
 
-	//for (int i = ZstackIndex - 1; i >= 0; i--) {
-	//	printf("Zstack %d:\n\tindex %d\n\theight %g\n", i, Zstack[i].start - gcodefile, Zstack[i].Z);
-	//}
-
-	if (layerCount == 0) {
-		if (ZstackIndex) {
-			//printf("only one layer found!\n");
-			layer[layerCount].index = gcodefile;
-			layer[layerCount].height = Zstack[0].Z;
-			layer[layerCount].flags = 0;
-			layer[layerCount].size = filesz;
-			//printf("layer starts at %d (of %d) and is %d long and is %g high\n", layer[layerCount].index - gcodefile, filesz, layer[layerCount].size, layer[layerCount].height);
-			layerCount++;
-		}
-		else {
-			die("No layers detected in input file!","");
-		}
-	}
-
-	if (layerCount > 0)
-		layer[layerCount - 1].size = &gcodefile[filesz] - layer[layerCount - 1].index;
-	else
-		exit(0);
-
-	printf("%d layers OK\n", layerCount);
-
-	layer = realloc(layer, layerCount * sizeof(layerData));
-	if (layer == NULL)
-		die("Scan: realloc layer","");
-	layerSize = layerCount * sizeof(layerData);
+	printf("found layer %d\n", currentLayer);
 }
 
 /***************************************************************************\
@@ -782,10 +763,10 @@ void handle_mousedown(SDL_MouseButtonEvent button) {
 				viewPortL = gX - ((float) button.x) / zoomFactor;
 				viewPortB = ((float) button.y) / zoomFactor + gY;
 			#endif
+				render();
 			}
 			else if (currentLayer < layerCount - 1)
 				drawLayer(++currentLayer);
-			render();
 			break;
 	}
 }
@@ -911,16 +892,22 @@ void handle_userevent(SDL_UserEvent user) {
 		case TIMER_IDLE:
 				if (busy & BUSY_SCANFILE) {
 					// TODO: scan next layer
-					busy &= ~BUSY_SCANFILE;
-					busy |= BUSY_RENDER;
+					scanLine();
+					if ((busy & BUSY_SCANFILE) == 0) {
+						printf("File scanned, rendering...\n");
+						busy |= BUSY_RENDER;
+					}
 				}
 				else if (busy & BUSY_RENDER) {
 					bool allRendered = true;
 					int i;
 					// TODO: render next layer in background
 					for (i = 0; i < layerCount; i++) {
-						if ((layer[i].flags & LD_LISTGENERATED) == 0) {
-							glNewList(glListsBase + i, GL_COMPILE);
+						if (layer[i].glList == 0) {
+							glLoadIdentity();
+							glPushMatrix();
+							layer[i].glList = glGenLists(1);
+							glNewList(layer[i].glList, GL_COMPILE);
 							glBegin(GL_QUADS);
 							for (int j = SHADOW_LAYERS; j >= 1; j--) {
 								if (i - j > 0)
@@ -929,6 +916,7 @@ void handle_userevent(SDL_UserEvent user) {
 							render_layer(i, 1.0);
 							glEnd();
 							glEndList();
+							glPopMatrix();
 							layer[i].flags |= LD_LISTGENERATED;
 							allRendered = false;
 							break;
@@ -1006,9 +994,14 @@ int main(int argc, char* argv[]) {
 
 	filesz = filestats.st_size;
 
+	printf("File is %d long\n", filesz);
+
 	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
 	if (gcodefile == MAP_FAILED)
 		die("mmap ", argv[optind]);
+	gcodefile_end = &gcodefile[filesz];
+
+	busy = BUSY_SCANFILE;
 
 	scanLines();
 
@@ -1019,7 +1012,6 @@ int main(int argc, char* argv[]) {
 	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layer[i].index - gcodefile, layer[i].size);
 
 	Running = true;
-	busy = BUSY_SCANFILE;
 	Surf_Display = NULL;
 
 	if (SDL_Init(SDL_INIT_EVERYTHING) < 0)
@@ -1053,8 +1045,6 @@ int main(int argc, char* argv[]) {
 		zoomFactor = 1.0;
 
 		resize(600, 600);
-
-		printf("list base at %d, %d lists available\n", glListsBase, layerCount);
 	#else
 		viewPortL = viewPortT = 0.0;
 		viewPortR = viewPortB = 200.0;
@@ -1072,11 +1062,51 @@ int main(int argc, char* argv[]) {
 
 	SDL_Event Event;
 	while(Running != false) {
-		if (SDL_WaitEvent(&Event) == 0)
-			die("SDL_WaitEvent", "");
-		SDL_RemoveTimer(timerIdle);
+		if (busy) {
+			Event.type = SDL_NOEVENT;
+			SDL_PollEvent(&Event);
+		}
+		else {
+			if (SDL_WaitEvent(&Event) == 0)
+				die("SDL_WaitEvent", "");
+		}
+		//SDL_RemoveTimer(timerIdle);
 		switch (Event.type) {
 			case SDL_NOEVENT:
+				if (busy & BUSY_SCANFILE) {
+					// TODO: scan next layer
+					scanLine();
+					if ((busy & BUSY_SCANFILE) == 0) {
+						printf("File scanned, rendering...\n");
+						busy = BUSY_RENDER;
+					}
+				}
+				else if (busy & BUSY_RENDER) {
+					bool allRendered = true;
+					int i;
+					// TODO: render next layer in background
+					for (i = 0; i < layerCount; i++) {
+						if (layer[i].glList == 0) {
+							layer[i].glList = glGenLists(1);
+							glNewList(layer[i].glList, GL_COMPILE);
+							glBegin(GL_QUADS);
+							for (int j = SHADOW_LAYERS; j >= 1; j--) {
+								if (i - j > 0)
+									render_layer(i - j, SHADOW_ALPHA - (j - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
+							}
+							render_layer(i, 1.0);
+							glEnd();
+							glEndList();
+							layer[i].flags |= LD_LISTGENERATED;
+							allRendered = false;
+							break;
+						}
+					}
+					if (allRendered) {
+						printf("All %d layers rendered\n", i);
+						busy &= ~BUSY_RENDER;
+					}
+				}
 				break;
 			case SDL_QUIT:
 				Running = false;
@@ -1112,8 +1142,8 @@ int main(int argc, char* argv[]) {
 				break;
 		}
 		//idle code
-		if (busy)
-			timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
+		//if (busy)
+		//	timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
 	}
 	if (timerKeyRepeat)
 		SDL_RemoveTimer(timerKeyRepeat);
