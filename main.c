@@ -64,6 +64,9 @@
 // main loop fall-through flag
 bool Running;
 
+// whether or not to do cacheing of each layer
+bool cache;
+
 // drawing stuff
 #define SHADOW_LAYERS 3
 #define	SHADOW_ALPHA  0.2
@@ -74,10 +77,11 @@ bool Running;
 int busy;
 
 // getopt stuff
-static const char *optString = "l:w:h?";
+static const char *optString = "l:w:nh?";
 static const struct option longOpts[] = {
 	{ "layer", required_argument, NULL, 'l' },
 	{ "width", required_argument, NULL, 'w' },
+	{ "no-cache", no_argument,    NULL, 'n' },
 	{ 0      , 0                , 0   , 0   }
 };
 
@@ -98,12 +102,12 @@ typedef struct {
 } ZstackItem;
 ZstackItem Zstack[8];
 
-
+// file scan stuff
 #define	LMASK(l) (1<<((l & ~0x20) - 'A'))
 #define	SEEN(c) ((seen & LMASK(c)) != 0)
 #define	LW(c)	linewords[c -'A']
 
-
+// layer data
 #define	LD_LISTGENERATED 1
 typedef struct {
 	char*	index;
@@ -134,8 +138,6 @@ int layerVelocity;
 int currentLayer;
 float zoomFactor;
 
-//int glListsBase = 0;
-
 // SDL Events Interface
 #define	KMM_LSHIFT 1
 #define KMM_RSHIFT 2
@@ -160,16 +162,18 @@ float gXmouseDown = 0.0, gYmouseDown = 0.0;
 
 void display_usage() {
 	printf("\n");
-	printf("USAGE: gcodeview [-w|--width width] [-l|--layer layer] <file.gcode>\n");
+	printf("USAGE: gcodeview [-w|--width width] [-l|--layer layer] [-n|--no-cache] <file.gcode>\n");
 	printf("\n");
-	printf("\twidth: Extrusion Width used to draw lines\n");
-	printf("\tlayer: Render this layer first\n");
+	printf("\twidth:    Extrusion Width used to draw lines\n");
+	printf("\tlayer:    Render this layer first\n");
+	printf("\tno-cache: Don't cache layers (large files)\n");
 	printf("\n");
 	printf("Color Key:\n");
 	printf("\n");
-	printf("\tBlack: Extrusion move at current layer height\n");
-	printf("\tGreen: Travel move at current layer height\n");
-	printf("\tRed:   Travel move at different layer height (ie hop/z-lift)\n");
+	printf("\tBlack:    Extrusion move at current layer height\n");
+	printf("\tGreen:    Travel move at current layer height\n");
+	printf("\tRed:      Travel move at higher layer height (ie hop/z-lift)\n");
+	printf("\tMagenta:  Travel move at lower layer height (ie cutting/etching)\n");
 	printf("\n");
 	exit(0);
 }
@@ -225,9 +229,9 @@ void dumpZstack() {
 \***************************************************************************/
 
 void findEndFloat(char *c, char **end) {
-	while ((c >= '0' && c <= '9') || (c == '.') || (c == 'e') || (c == '-') || (c == '+'))
+	while ((*c >= '0' && *c <= '9') || (*c == '.') || (*c == 'e') || (*c == '-') || (*c == '+'))
 		c++;
-	&end = c;
+	*end = c;
 }
 
 uint32_t scanline(char *line, int length, float *words, char **end, uint32_t interest_mask) {
@@ -457,7 +461,6 @@ void render() {
 	#ifdef	OPENGL
 			glEnd();
 			glEndList();
-			layer[currentLayer].flags |= LD_LISTGENERATED;
 		}
 		glPopMatrix();
 		glPushMatrix();
@@ -540,6 +543,10 @@ void drawLayer(int layerNum) {
 		layerNum = layerCount;
 	snprintf(msgbuf, 256, "Layer %3d: %gmm", layerNum + 1, layer[layerNum].height);
 //	printf("Drawing layer %3d (%5.2f)\n", layerNum, layer[layerNum].height);
+	if ((currentLayer != layerNum) && (cache == false)) {
+		glDeleteLists(layer[currentLayer].glList, 1);
+		layer[currentLayer].glList = 0;
+	}
 	currentLayer = layerNum;
 	render();
 }
@@ -623,7 +630,7 @@ void scanLine() {
 						layerCount++;
 						//printf("NEW LAYER: %d\n", layerCount);
 						if (layerCount * sizeof(layerData) >= layerSize) {
-							layerSize <<= 1;
+							layerSize += sizeof(layerData) * 128;
 							layer = realloc(layer, layerSize);
 							if (layer == NULL)
 								die("Scan: realloc layer","");
@@ -902,47 +909,6 @@ void handle_userevent(SDL_UserEvent user) {
 			render();
 			timerDragRender = SDL_AddTimer(50, &timerCallback, (void *) TIMER_DRAGRENDER);
 			break;
-		case TIMER_IDLE:
-				if (busy & BUSY_SCANFILE) {
-					// TODO: scan next layer
-					scanLine();
-					if ((busy & BUSY_SCANFILE) == 0) {
-						printf("File scanned, rendering...\n");
-						busy |= BUSY_RENDER;
-					}
-				}
-				else if (busy & BUSY_RENDER) {
-					bool allRendered = true;
-					int i;
-					// TODO: render next layer in background
-					for (i = 0; i < layerCount; i++) {
-						if (layer[i].glList == 0) {
-							glLoadIdentity();
-							glPushMatrix();
-							layer[i].glList = glGenLists(1);
-							glNewList(layer[i].glList, GL_COMPILE);
-							glBegin(GL_QUADS);
-							for (int j = SHADOW_LAYERS; j >= 1; j--) {
-								if (i - j > 0)
-									render_layer(i - j, SHADOW_ALPHA - (j - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
-							}
-							render_layer(i, 1.0);
-							glEnd();
-							glEndList();
-							glPopMatrix();
-							layer[i].flags |= LD_LISTGENERATED;
-							allRendered = false;
-							break;
-						}
-					}
-					if (allRendered) {
-						printf("All %d layers rendered\n", i);
-						busy &= ~BUSY_RENDER;
-					}
-				}
-			if (busy)
-				timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
-			break;
 	}
 }
 
@@ -960,6 +926,7 @@ int main(int argc, char* argv[]) {
 	msgbuf[0] = 0;
 
 	currentLayer = 0;
+	cache = true;
 
 	int longIndex;
 	int opt;
@@ -973,6 +940,11 @@ int main(int argc, char* argv[]) {
 
 				case 'w':
 					extrusionWidth = strtof(optarg, NULL);
+					break;
+
+				case 'n':
+					printf("DISABLING CACHE\n");
+					cache = false;
 					break;
 
 				case 'h':   /* fall-through is intentional */
@@ -1090,11 +1062,17 @@ int main(int argc, char* argv[]) {
 					// TODO: scan next layer
 					scanLine();
 					if ((busy & BUSY_SCANFILE) == 0) {
-						printf("File scanned, rendering...\n");
-						busy = BUSY_RENDER;
+						if (cache) {
+							printf("File scanned, rendering...\n");
+							busy = BUSY_RENDER;
+						}
+						else {
+							printf("File scanned.\n");
+							busy = 0;
+						}
 					}
 				}
-				else if (busy & BUSY_RENDER) {
+				else if ((busy & BUSY_RENDER) && cache) {
 					bool allRendered = true;
 					int i;
 					// TODO: render next layer in background
