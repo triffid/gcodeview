@@ -64,6 +64,15 @@
 // main loop fall-through flag
 bool Running;
 
+// drawing stuff
+#define SHADOW_LAYERS 3
+#define	SHADOW_ALPHA  0.2
+
+// busy flags
+#define	BUSY_SCANFILE	1
+#define	BUSY_RENDER		2
+int busy;
+
 // getopt stuff
 static const char *optString = "l:w:h?";
 static const struct option longOpts[] = {
@@ -79,6 +88,14 @@ float extrusionWidth = 0.3;
 int layerCount;
 size_t layerSize;
 float linewords[26];
+
+// for tracking hop/z-lift moves
+int ZstackIndex = 0;
+struct {
+	char *start;
+	float Z;
+} Zstack[8];
+
 
 #define	LMASK(l) (1<<((l & ~0x20) - 'A'))
 #define	SEEN(c) ((seen & LMASK(c)) != 0)
@@ -116,10 +133,13 @@ int glListsBase = 0;
 #define	KMM_ALT    8
 int keymodifiermask;
 
-#define	TIMER_KEYREPEAT 1
+#define	TIMER_KEYREPEAT  1
 #define	TIMER_DRAGRENDER 2
+#define TIMER_IDLE       3
 SDL_TimerID timerKeyRepeat = NULL;
 SDL_TimerID timerDragRender = NULL;
+SDL_TimerID timerIdle = NULL;
+
 float gXmouseDown = 0.0, gYmouseDown = 0.0;
 
 /***************************************************************************\
@@ -175,7 +195,7 @@ Uint32 timerCallback(Uint32 interval, void* param) {
 
 	SDL_PushEvent(&e);
 
-	return 20;
+	return 0;
 }
 
 /***************************************************************************\
@@ -387,8 +407,6 @@ void render() {
 		int lines = 0;
 	#endif
 
-	#define SHADOW_LAYERS 3
-	#define	SHADOW_ALPHA  0.2
 	for (int i = SHADOW_LAYERS; i >= 1; i--) {
 		if (currentLayer - i > 0)
 			render_layer(currentLayer - i, SHADOW_ALPHA - (i - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
@@ -492,6 +510,98 @@ void drawLayer(int layerNum) {
 *                                                                           *
 \***************************************************************************/
 
+void scanLine() {
+	static int l = 0;
+	static float lastZ = 0.0;
+
+	uint32_t seen = 0;
+	char *end;
+	float G, Z, E;
+
+	if (l <= filesz) {
+		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
+
+		G = linewords['G' - 'A'];
+		Z = linewords['Z' - 'A'];
+		E = linewords['E' - 'A'];
+
+		if (((seen & LMASK('G')) != 0) && (G == 0.0 || G == 1.0)) {
+			if ((seen & LMASK('Z')) != 0) {
+				for (int i = 0; i < ZstackIndex; i++) {
+					if (Zstack[i].Z == Z) {
+						ZstackIndex = i;
+						break;
+					}
+				}
+				//printf("Zstack: %d (%g)\n", ZstackIndex, Z);
+				Zstack[ZstackIndex].start = &gcodefile[l];
+				Zstack[ZstackIndex].Z = Z;
+				if (ZstackIndex < 8 - 1)
+					ZstackIndex++;
+				else
+					die("overflow while checking if Z moves are related to hop","");
+			}
+			if (((seen & LMASK('E')) != 0) && (ZstackIndex > 0) && (Z != lastZ)) {
+				int i;
+				for (i = 0; i < ZstackIndex; i++) {
+					if (Zstack[i].Z == Z)
+						break;
+				}
+				if (i < 8) {
+					layer[layerCount].index = Zstack[i].start;
+					layer[layerCount].height = Zstack[i].Z;
+					layer[layerCount].flags = 0;
+					lastZ = layer[layerCount].height;
+					Zstack[0].start = layer[layerCount].index;
+					Zstack[0].Z = layer[layerCount].height;
+					ZstackIndex = 1;
+					if (layerCount > 0)
+						layer[layerCount - 1].size = layer[layerCount].index - layer[layerCount - 1].index;
+					layerCount++;
+					if ((layerCount + 1) * sizeof(layerData) > layerSize) {
+						layer = realloc(layer, layerSize << 1);
+						if (layer == NULL)
+							die("Scan: realloc layer","");
+						layerSize <<= 1;
+					}
+				}
+				else
+					die("Zstack: can't find Z value in stack!","this should never happen");
+			}
+		}
+		l = end - gcodefile;
+	}
+
+	if (l >= filesz) {
+		if (layerCount == 0) {
+			if (ZstackIndex) {
+				layer[layerCount].index = gcodefile;
+				layer[layerCount].height = Zstack[0].Z;
+				layer[layerCount].flags = 0;
+				layer[layerCount].size = filesz;
+				layerCount++;
+			}
+			else {
+				die("No layers detected in input file!","");
+			}
+		}
+
+		if (layerCount > 0)
+			layer[layerCount - 1].size = &gcodefile[filesz] - layer[layerCount - 1].index;
+		else
+			exit(0);
+
+		printf("%d layers OK\n", layerCount);
+
+		layer = realloc(layer, layerCount * sizeof(layerData));
+		if (layer == NULL)
+			die("Scan: realloc layer","");
+		layerSize = layerCount * sizeof(layerData);
+
+		busy = (busy & ~BUSY_SCANFILE) | BUSY_RENDER;
+	}
+}
+
 void scanLines() {
 	int l = 0;
 
@@ -505,12 +615,6 @@ void scanLines() {
 	char *end;
 	uint32_t seen;
 	float G, Z, lastZ = 0.0, E;
-
-	int ZstackIndex = 0;
-	struct {
-		char *start;
-		float Z;
-	} Zstack[8];
 
 	while (l < filesz) {
 		seen = scanline(&gcodefile[l], filesz - l, linewords, &end);
@@ -704,7 +808,7 @@ void handle_mouseup(SDL_MouseButtonEvent button) {
 				timerDragRender = NULL;
 			}
 			break;
-	}
+		}
 }
 
 void handle_keydown(SDL_KeyboardEvent key) {
@@ -728,18 +832,18 @@ void handle_keydown(SDL_KeyboardEvent key) {
 			break;
 		case SDLK_PAGEUP:
 			layerVelocity = 1;
-			if (currentLayer < layerCount - 1)
-				drawLayer(++currentLayer);
 			if (timerKeyRepeat)
 				SDL_RemoveTimer(timerKeyRepeat);
+			else if (currentLayer < layerCount - 1)
+				drawLayer(++currentLayer);
 			timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
 			break;
 		case SDLK_PAGEDOWN:
 			layerVelocity = -1;
-			if (currentLayer > 0)
-				drawLayer(--currentLayer);
 			if (timerKeyRepeat)
 				SDL_RemoveTimer(timerKeyRepeat);
+			else if (currentLayer > 0)
+				drawLayer(--currentLayer);
 			timerKeyRepeat = SDL_AddTimer(500, &timerCallback, (void *) TIMER_KEYREPEAT);
 			break;
 		case SDLK_LSHIFT:
@@ -784,17 +888,59 @@ void handle_keyup(SDL_KeyboardEvent key) {
 void handle_userevent(SDL_UserEvent user) {
 	switch (user.code) {
 		case TIMER_KEYREPEAT:
+			SDL_RemoveTimer(timerKeyRepeat);
 			if (layerVelocity > 0) {
 				if (currentLayer < layerCount - 1)
 					drawLayer(++currentLayer);
+				else
+					break;
 			}
 			else if (layerVelocity < 0) {
 				if (currentLayer > 0)
 					drawLayer(--currentLayer);
+				else
+					break;
 			}
+			timerKeyRepeat = SDL_AddTimer(20, &timerCallback, (void *) TIMER_KEYREPEAT);
 			break;
 		case TIMER_DRAGRENDER:
+			SDL_RemoveTimer(timerDragRender);
 			render();
+			timerDragRender = SDL_AddTimer(50, &timerCallback, (void *) TIMER_DRAGRENDER);
+			break;
+		case TIMER_IDLE:
+				if (busy & BUSY_SCANFILE) {
+					// TODO: scan next layer
+					busy &= ~BUSY_SCANFILE;
+					busy |= BUSY_RENDER;
+				}
+				else if (busy & BUSY_RENDER) {
+					bool allRendered = true;
+					int i;
+					// TODO: render next layer in background
+					for (i = 0; i < layerCount; i++) {
+						if ((layer[i].flags & LD_LISTGENERATED) == 0) {
+							glNewList(glListsBase + i, GL_COMPILE);
+							glBegin(GL_QUADS);
+							for (int j = SHADOW_LAYERS; j >= 1; j--) {
+								if (i - j > 0)
+									render_layer(i - j, SHADOW_ALPHA - (j - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
+							}
+							render_layer(i, 1.0);
+							glEnd();
+							glEndList();
+							layer[i].flags |= LD_LISTGENERATED;
+							allRendered = false;
+							break;
+						}
+					}
+					if (allRendered) {
+						printf("All %d layers rendered\n", i);
+						busy &= ~BUSY_RENDER;
+					}
+				}
+			if (busy)
+				timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
 			break;
 	}
 }
@@ -873,6 +1019,7 @@ int main(int argc, char* argv[]) {
 	//	printf("Layer %3d starts at %7d and is %7d bytes long\n", i, layer[i].index - gcodefile, layer[i].size);
 
 	Running = true;
+	busy = BUSY_SCANFILE;
 	Surf_Display = NULL;
 
 	if (SDL_Init(SDL_INIT_EVERYTHING) < 0)
@@ -921,11 +1068,16 @@ int main(int argc, char* argv[]) {
 
 	layerVelocity = 0;
 
+	timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
+
 	SDL_Event Event;
 	while(Running != false) {
 		if (SDL_WaitEvent(&Event) == 0)
 			die("SDL_WaitEvent", "");
+		SDL_RemoveTimer(timerIdle);
 		switch (Event.type) {
+			case SDL_NOEVENT:
+				break;
 			case SDL_QUIT:
 				Running = false;
 				break;
@@ -960,7 +1112,8 @@ int main(int argc, char* argv[]) {
 				break;
 		}
 		//idle code
-		//render code
+		if (busy)
+			timerIdle = SDL_AddTimer(20, &timerCallback, (void *) TIMER_IDLE);
 	}
 	if (timerKeyRepeat)
 		SDL_RemoveTimer(timerKeyRepeat);
