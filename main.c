@@ -70,6 +70,8 @@ bool cache;
 // drawing stuff
 #define SHADOW_LAYERS 3
 #define	SHADOW_ALPHA  0.2
+int shadow_layers = 3;
+float shadow_alpha = 0.2;
 
 // busy flags
 #define	BUSY_SCANFILE	1
@@ -452,9 +454,9 @@ void render() {
 		int lines = 0;
 	#endif
 
-			for (int i = SHADOW_LAYERS; i >= 1; i--) {
+			for (int i = shadow_layers; i >= 1; i--) {
 				if (currentLayer - i > 0)
-					render_layer(currentLayer - i, SHADOW_ALPHA - (i - 1) * (SHADOW_ALPHA / SHADOW_LAYERS));
+					render_layer(currentLayer - i, shadow_alpha - (i - 1) * (shadow_alpha / ((float) shadow_layers)));
 			}
 			render_layer(currentLayer, 1.0);
 
