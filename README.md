@@ -50,3 +50,11 @@ Dependencies
 2. OpenGL
 3. FTGL
 4. fontconfig (linux/mac, windows probably can give me the path to a font some other way)
+
+Mac OS X (Lion)
+---------------
+Install deps with homebrew
+1.  brew install sdl
+2.  brew install ftgl
+3.  brew install fontconfig
+
