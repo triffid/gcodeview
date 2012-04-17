@@ -27,7 +27,9 @@
 #define		_GNU_SOURCE
 #endif
 
+#ifdef __linux__
 #include	<features.h>
+#endif
 
 #include	<stdlib.h>
 #include	<stdint.h>
@@ -45,6 +47,7 @@
 
 #include	<SDL/SDL.h>
 #include	<FTGL/ftgl.h>
+
 #include	<fontconfig/fontconfig.h>
 
 #define		bool uint8_t
@@ -860,7 +863,12 @@ int main(int argc, char* argv[]) {
 
 	filesz = filestats.st_size;
 
+#ifdef __linux__
 	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+#endif
+#ifdef __apple
+	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_FIXED, fd, 0);
+#endif
 	if (gcodefile == MAP_FAILED)
 		die("mmap ", argv[optind]);
 

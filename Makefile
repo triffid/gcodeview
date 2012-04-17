@@ -1,6 +1,6 @@
 EXECUTABLE = gcodeview
 
-LIBS		= sdl ftgl fontconfig gl
+LIBS		= sdl ftgl fontconfig gl freetype2
 
 OPTIMIZE	= 2
 
