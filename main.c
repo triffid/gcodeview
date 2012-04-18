@@ -451,7 +451,7 @@ void resize(int w, int h) {
 #endif
 
 #ifdef __APPLE__
-		Surf_Display = SDL_SetVideoMode( Surf_width, Surf_height, 0, SDL_OPENGL | SDL_HWSURFACE | SDL_NOFRAME );
+		Surf_Display = SDL_SetVideoMode( Surf_width, Surf_height, 0, SDL_OPENGL | SDL_HWSURFACE | SDL_RESIZABLE);
 #endif
 
 		w = Surf_Display->w; h = Surf_Display->h;
