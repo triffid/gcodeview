@@ -446,7 +446,14 @@ void resize(int w, int h) {
 			SDL_FreeSurface(Surf_Display);
 
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#ifdef __linux__
 		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_RESIZABLE | SDL_OPENGL);
+#endif
+
+#ifdef __APPLE__
+		Surf_Display = SDL_SetVideoMode( Surf_width, Surf_height, 0, SDL_OPENGL | SDL_HWSURFACE | SDL_NOFRAME );
+#endif
+
 		w = Surf_Display->w; h = Surf_Display->h;
 		glViewport(0, 0, w, h);
 		glClearColor(0.8, 0.8, 0.5, 0.5);
@@ -866,9 +873,10 @@ int main(int argc, char* argv[]) {
 #ifdef __linux__
 	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
 #endif
-#ifdef __apple
-	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_FIXED, fd, 0);
+#ifdef __APPLE__
+	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_FILE|MAP_PRIVATE|MAP_NOCACHE, fd, 0);
 #endif
+
 	if (gcodefile == MAP_FAILED)
 		die("mmap ", argv[optind]);
 
