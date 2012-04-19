@@ -64,6 +64,10 @@
 	float viewPortL, viewPortR, viewPortT, viewPortB;
 #endif
 
+#ifndef	SDL_NOEVENT
+#define	SDL_NOEVENT 0
+#endif
+
 // main loop fall-through flag
 bool Running;
 
@@ -504,9 +508,6 @@ void resize(int w, int h) {
 			dim = w;
 
 		for (int i = 0; i < layerCount; glDeleteLists(layer[i].glList, 1), layer[i].glList = 0, layer[i++].flags = 0);
-
-		if (Surf_Display != NULL)
-			SDL_FreeSurface(Surf_Display);
 
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
