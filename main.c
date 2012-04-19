@@ -27,7 +27,9 @@
 #define		_GNU_SOURCE
 #endif
 
+#ifdef __linux__
 #include	<features.h>
+#endif
 
 #include	<stdlib.h>
 #include	<stdint.h>
@@ -45,6 +47,7 @@
 
 #include	<SDL/SDL.h>
 #include	<FTGL/ftgl.h>
+
 #include	<fontconfig/fontconfig.h>
 
 #define		bool uint8_t
@@ -506,7 +509,9 @@ void resize(int w, int h) {
 			SDL_FreeSurface(Surf_Display);
 
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
-		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 32, SDL_HWSURFACE | SDL_RESIZABLE | SDL_OPENGL);
+
+		Surf_Display = SDL_SetVideoMode(Surf_width, Surf_height, 0, SDL_HWSURFACE | SDL_RESIZABLE | SDL_OPENGL);
+
 		w = Surf_Display->w; h = Surf_Display->h;
 		glViewport(0, 0, w, h);
 		glClearColor(0.8, 0.8, 0.5, 0.5);
@@ -983,7 +988,14 @@ int main(int argc, char* argv[]) {
 
 	printf("File is %d long\n", filesz);
 
+#ifdef __linux__
 	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE | MAP_POPULATE, fd, 0);
+#elif defined __APPLE__
+	gcodefile = mmap(NULL, filesz, PROT_READ, MAP_PRIVATE, fd, 0);
+#else
+	#error "don't know how to mmap on this system!"
+#endif
+
 	if (gcodefile == MAP_FAILED)
 		die("mmap ", argv[optind]);
 	gcodefile_end = &gcodefile[filesz];
