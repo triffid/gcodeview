@@ -1,12 +1,10 @@
-ifneq ($(wildcard /System/Library/Extensions/AppleFileSystemDriver.kext),)
-	OSTYPE=darwin
-endif
+OSTYPE=$(shell uname)
 
 LIBS		= sdl ftgl fontconfig 
 CFLAGS		= -O$(OPTIMIZE) -std=c99  -Wall `pkg-config --cflags $(LIBS)`
 LDFLAGS		= `pkg-config --libs $(LIBS)`
 
-ifeq ($(OSTYPE),darwin)
+ifeq ($(OSTYPE),Darwin)
 	LIBS		+= freetype2
 	LDFLAGS		+= -lm -framework OpenGL
 else
