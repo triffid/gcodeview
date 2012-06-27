@@ -507,7 +507,12 @@ void resize(int w, int h) {
 		else
 			dim = w;
 
-		for (int i = 0; i < layerCount; glDeleteLists(layer[i].glList, 1), layer[i].glList = 0, layer[i++].flags = 0);
+		for (int i = 0; i < layerCount; i++) {
+			if (layer[i].glList)
+				glDeleteLists(layer[i].glList, 1);
+			layer[i].glList = 0;
+			layer[i].flags = 0;
+		};
 
 		SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
 
