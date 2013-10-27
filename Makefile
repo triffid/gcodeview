@@ -2,11 +2,11 @@ OSTYPE=$(shell uname)
 
 LIBS		= sdl ftgl fontconfig 
 CFLAGS		= -O$(OPTIMIZE) -std=c99  -Wall `pkg-config --cflags $(LIBS)`
-LDFLAGS		= `pkg-config --libs $(LIBS)`
+LDFLAGS		= `pkg-config --libs $(LIBS)` -lm
 
 ifeq ($(OSTYPE),Darwin)
 	LIBS		+= freetype2
-	LDFLAGS		+= -lm -framework OpenGL
+	LDFLAGS		+= -framework OpenGL
 else
 	LIBS		+= gl
 endif
