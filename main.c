@@ -1038,12 +1038,13 @@ int main(int argc, char* argv[]) {
 		FcPatternGetString(match, FC_FILE, 0, (FcChar8 **) &file);
 		FcPatternGetInteger(match, FC_INDEX, 0, &index);
 
-		FcPatternDestroy (match);
-		FcPatternDestroy (pat);
 
 	font = ftglCreateExtrudeFont(file);
 	if (!font)
 		die("FTGL createFont", "");
+
+	FcPatternDestroy (match);
+	FcPatternDestroy (pat);
 
 	#ifdef	OPENGL
 		transX = transY = 0.0;
